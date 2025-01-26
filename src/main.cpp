@@ -1,28 +1,104 @@
 #define GLFW_INCLUDE_GLCOREARB
-#define GL_GLEXT_PROTOTYPES
 #include <GLFW/glfw3.h>
 
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
-struct Glfw_guard
+namespace
 {
-    ~Glfw_guard()
+
+#define ENUMERATE_GL_FUNCTIONS(f)                                              \
+    f(PFNGLCREATESHADERPROC, glCreateShader);                                  \
+    f(PFNGLSHADERSOURCEPROC, glShaderSource);                                  \
+    f(PFNGLCOMPILESHADERPROC, glCompileShader);                                \
+    f(PFNGLGETSHADERIVPROC, glGetShaderiv);                                    \
+    f(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog);                          \
+    f(PFNGLATTACHSHADERPROC, glAttachShader);                                  \
+    f(PFNGLCREATEPROGRAMPROC, glCreateProgram);                                \
+    f(PFNGLLINKPROGRAMPROC, glLinkProgram);                                    \
+    f(PFNGLGETPROGRAMIVPROC, glGetProgramiv);                                  \
+    f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
+    f(PFNGLDELETESHADERPROC, glDeleteShader);                                  \
+    f(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
+    f(PFNGLBINDTEXTUREPROC, glBindTexture);                                    \
+    f(PFNGLTEXPARAMETERIPROC, glTexParameteri);                                \
+    f(PFNGLTEXIMAGE2DPROC, glTexImage2D);                                      \
+    f(PFNGLBINDIMAGETEXTUREPROC, glBindImageTexture);                          \
+    f(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers);                            \
+    f(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);                            \
+    f(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);                  \
+    f(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus);              \
+    f(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
+    f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
+    f(PFNGLVIEWPORTPROC, glViewport);                                          \
+    f(PFNGLCLEARCOLORPROC, glClearColor);                                      \
+    f(PFNGLCLEARPROC, glClear);                                                \
+    f(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);                                \
+    f(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);
+
+// clang-format off
+#define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
+// clang-format on
+
+ENUMERATE_GL_FUNCTIONS(DECLARE_GL_FUNCTION)
+
+void load_gl_functions()
+{
+#define LOAD_GL_FUNCTION(type, name)                                           \
+    name = reinterpret_cast<type>(glfwGetProcAddress(#name))
+
+    ENUMERATE_GL_FUNCTIONS(LOAD_GL_FUNCTION)
+
+#undef LOAD_GL_FUNCTION
+}
+
+template <typename F>
+class Scope_guard
+{
+public:
+    explicit Scope_guard(F &&f) : m_f(std::move(f))
     {
-        glfwTerminate();
     }
+
+    explicit Scope_guard(F &f) : m_f(f)
+    {
+    }
+
+    ~Scope_guard() noexcept
+    {
+        m_f();
+    }
+
+    Scope_guard(const Scope_guard &) = delete;
+    Scope_guard(Scope_guard &&) = delete;
+    Scope_guard &operator=(const Scope_guard &) = delete;
+    Scope_guard &operator=(Scope_guard &&) = delete;
+
+private:
+    F m_f;
 };
 
-struct Window_guard
+#define CONCATENATE_IMPL(s1, s2) s1##s2
+#define CONCATENATE(s1, s2)      CONCATENATE_IMPL(s1, s2)
+#define SCOPE_EXIT(f)            const Scope_guard CONCATENATE(scope_guard_, __LINE__)(f)
+
+[[nodiscard]] std::string read_file(const char *file_name)
 {
-    ~Window_guard()
+    std::ifstream file(file_name);
+    if (!file.is_open())
     {
-        glfwDestroyWindow(window);
+        throw std::runtime_error("Failed to open file");
     }
 
-    GLFWwindow *window;
-};
+    std::ostringstream oss;
+    oss << file.rdbuf();
+    return oss.str();
+}
+
+} // namespace
 
 int main()
 {
@@ -38,7 +114,7 @@ int main()
         {
             return EXIT_FAILURE;
         }
-        Glfw_guard glfw_guard {};
+        SCOPE_EXIT([] { glfwTerminate(); });
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -48,33 +124,28 @@ int main()
         {
             return EXIT_FAILURE;
         }
-        Window_guard Window_guard {window};
+        SCOPE_EXIT([window] { glfwDestroyWindow(window); });
 
         glfwMakeContextCurrent(window);
         glfwSwapInterval(1);
 
-        // Create compute shader
+        load_gl_functions();
+
+        const auto shader_code = read_file("shader.comp");
+        const auto c_shader_code = shader_code.c_str();
+
         const auto shader_id = glCreateShader(GL_COMPUTE_SHADER);
-        constexpr auto shader_code = R"(#version 430
-
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
-layout(rgba8, binding = 0) uniform image2D image;
-
-void main() {
-    ivec2 size = imageSize(image);
-    vec2 uv = vec2(gl_GlobalInvocationID.xy) / vec2(size);
-    vec4 color = vec4(uv, 0.0, 1.0);
-    imageStore(image, ivec2(gl_GlobalInvocationID.xy), color);
-})";
-        glShaderSource(shader_id, 1, &shader_code, nullptr);
+        glShaderSource(shader_id, 1, &c_shader_code, nullptr);
         glCompileShader(shader_id);
         int success {};
-        char buffer[1024] {};
         glGetShaderiv(shader_id, GL_COMPILE_STATUS, &success);
         if (!success)
         {
-            glGetShaderInfoLog(shader_id, sizeof(buffer), nullptr, buffer);
-            std::cerr << "Shader compilation failed:\n" << buffer << '\n';
+            int buf_length {};
+            glGetShaderiv(shader_id, GL_INFO_LOG_LENGTH, &buf_length);
+            std::string message(static_cast<std::size_t>(buf_length), '\0');
+            glGetShaderInfoLog(shader_id, buf_length, nullptr, message.data());
+            std::cerr << "Shader compilation failed:\n" << message << '\n';
         }
         const auto program_id = glCreateProgram();
         glAttachShader(program_id, shader_id);
@@ -82,8 +153,12 @@ void main() {
         glGetProgramiv(program_id, GL_LINK_STATUS, &success);
         if (!success)
         {
-            glGetProgramInfoLog(program_id, sizeof(buffer), nullptr, buffer);
-            std::cerr << "Program linking failed:\n" << buffer << '\n';
+            int buf_length {};
+            glGetProgramiv(program_id, GL_INFO_LOG_LENGTH, &buf_length);
+            std::string message(static_cast<std::size_t>(buf_length), '\0');
+            glGetProgramInfoLog(
+                program_id, buf_length, nullptr, message.data());
+            std::cerr << "Program linking failed:\n" << message << '\n';
         }
         glDeleteShader(shader_id);
 

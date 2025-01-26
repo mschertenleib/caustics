@@ -16,8 +16,8 @@ endif ()
 if (NOT (EXISTS ${CPM_DOWNLOAD_LOCATION}))
     message(STATUS "Downloading CPM.cmake to ${CPM_DOWNLOAD_LOCATION}")
     file(DOWNLOAD
-            https://github.com/TheLartians/CPM.cmake/releases/download/v${CPM_DOWNLOAD_VERSION}/CPM.cmake
-            ${CPM_DOWNLOAD_LOCATION}
+        https://github.com/TheLartians/CPM.cmake/releases/download/v${CPM_DOWNLOAD_VERSION}/CPM.cmake
+        ${CPM_DOWNLOAD_LOCATION}
     )
 endif ()
 
@@ -31,8 +31,8 @@ set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 CPMAddPackage(
-        GITHUB_REPOSITORY glfw/glfw
-        GIT_TAG 3.4
+    GITHUB_REPOSITORY glfw/glfw
+    GIT_TAG 3.4
 )
 
 
@@ -40,30 +40,36 @@ add_executable(caustics src/main.cpp)
 target_compile_features(caustics PRIVATE cxx_std_20)
 target_link_libraries(caustics PRIVATE OpenGL::GL glfw)
 
+# NOTE: this custom target is for always copying the shaders to the binary directory
+add_custom_target(shaders ALL DEPENDS src/shader.comp)
+add_custom_command(TARGET shaders POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/src/shader.comp $<TARGET_FILE_DIR:caustics>
+)
+add_dependencies(caustics shaders)
 
 set(clang_warnings
-        -Wall
-        -Wextra
-        -Wshadow
-        -Wnon-virtual-dtor
-        -Wold-style-cast
-        -Wcast-align
-        -Wunused
-        -Woverloaded-virtual
-        -Wpedantic
-        -Wconversion
-        -Wsign-conversion
-        -Wnull-dereference
-        -Wdouble-promotion
+    -Wall
+    -Wextra
+    -Wshadow
+    -Wnon-virtual-dtor
+    -Wold-style-cast
+    -Wcast-align
+    -Wunused
+    -Woverloaded-virtual
+    -Wpedantic
+    -Wconversion
+    -Wsign-conversion
+    -Wnull-dereference
+    -Wdouble-promotion
 )
 set(gcc_warnings
-        ${clang_warnings}
-        -Wmisleading-indentation
-        -Wduplicated-cond
-        -Wduplicated-branches
-        -Wlogical-op
-        -Wuseless-cast
-        -Wswitch-enum
+    ${clang_warnings}
+    -Wmisleading-indentation
+    -Wduplicated-cond
+    -Wduplicated-branches
+    -Wlogical-op
+    -Wuseless-cast
+    -Wswitch-enum
 )
 if (CMAKE_CXX_COMPILER_ID MATCHES ".*Clang")
     target_compile_options(caustics PRIVATE ${clang_warnings})
