@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace
 {
@@ -120,6 +121,20 @@ struct Rectangle
     int y0;
     int x1;
     int y1;
+};
+
+struct Circle
+{
+    float cx;
+    float cy;
+    float r;
+};
+
+struct Scene
+{
+    float width;
+    float height;
+    std::vector<Circle> circles;
 };
 
 void glfw_error_callback(int error, const char *description)

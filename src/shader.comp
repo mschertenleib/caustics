@@ -2,12 +2,67 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(rgba8, binding = 0) uniform image2D image;
+layout(binding = 0, rgba8) uniform image2D image;
+
+
+const float pi = 3.14159274;
+
+
+uint hash(uint x)
+{
+    x += x << 10;
+    x ^= x >> 6;
+    x += x << 3;
+    x ^= x >> 11;
+    x += x << 15;
+    return x;
+}
+
+float random(inout uint rng_state)
+{
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return float(rng_state) / 4294967295.0;
+}
+
+float intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius)
+{
+    const vec2 oc = center - origin;
+    const float oc_dot_dir = dot(oc, direction);
+    const float det = oc_dot_dir * oc_dot_dir - dot(oc, oc) + radius * radius;
+    if (det < 0.0)
+    {
+        return 0.0;
+    }
+
+    const float sqrt_det = sqrt(det);
+    const float t1 = oc_dot_dir - sqrt_det;
+    const float epsilon = 1e-6;
+    if (t1 > epsilon)
+    {
+        return t1;
+    }
+
+    const float t2 = oc_dot_dir + sqrt_det;
+    if (t2 > epsilon)
+    {
+        return t2;
+    }
+
+    return 0.0;
+}
 
 void main()
 {
-    ivec2 size = imageSize(image);
-    vec2 uv = vec2(gl_GlobalInvocationID.xy) / vec2(size);
-    vec4 color = vec4(uv, 0.0, 1.0);
-    imageStore(image, ivec2(gl_GlobalInvocationID.xy), color);
+    const ivec2 size = imageSize(image);
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    const int pixel_index = pixel.y * size.x + pixel.x;
+    
+    uint rng_state = hash(pixel_index);
+
+    // const vec4 color = vec4(vec2(pixel) / vec2(size), 0.0, 1.0);
+    const vec4 color = vec4(random(rng_state), random(rng_state), random(rng_state), 1.0);
+
+    imageStore(image, pixel, color);
 }
