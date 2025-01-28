@@ -1,6 +1,7 @@
 #define GLFW_INCLUDE_GLCOREARB
 #include <GLFW/glfw3.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -13,6 +14,7 @@ namespace
 {
 
 #define ENUMERATE_GL_FUNCTIONS(f)                                              \
+    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLENABLEPROC, glEnable);                                              \
     f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
     f(PFNGLCREATESHADERPROC, glCreateShader);                                  \
@@ -27,6 +29,8 @@ namespace
     f(PFNGLLINKPROGRAMPROC, glLinkProgram);                                    \
     f(PFNGLGETPROGRAMIVPROC, glGetProgramiv);                                  \
     f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
+    f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
+    f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
     f(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
     f(PFNGLDELETETEXTURESPROC, glDeleteTextures);                              \
     f(PFNGLBINDTEXTUREPROC, glBindTexture);                                    \
@@ -264,14 +268,15 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D,
                  0,
-                 GL_RGBA8,
+                 GL_RGBA32F,
                  width,
                  height,
                  0,
                  GL_RGBA,
-                 GL_UNSIGNED_BYTE,
+                 GL_FLOAT,
                  nullptr);
-    glBindImageTexture(0, texture_id, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+    glBindImageTexture(
+        0, texture_id, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 
     return texture_id;
 }
@@ -363,8 +368,11 @@ int main()
         const auto program_id = create_compute_program("shader.comp");
         SCOPE_EXIT([program_id] { glDeleteProgram(program_id); });
 
-        constexpr int texture_width {32};
-        constexpr int texture_height {24};
+        const auto sample_index_loc =
+            glGetUniformLocation(program_id, "sample_index");
+
+        constexpr int texture_width {320};
+        constexpr int texture_height {240};
         const auto texture_id = create_texture(texture_width, texture_height);
         SCOPE_EXIT([&texture_id] { glDeleteTextures(1, &texture_id); });
 
@@ -376,14 +384,18 @@ int main()
         double last_time {glfwGetTime()};
         int num_frames {0};
 
+        unsigned int sample_index {0};
+
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
 
             glUseProgram(program_id);
+            glUniform1ui(sample_index_loc, sample_index);
             glDispatchCompute(static_cast<unsigned int>(texture_width),
                               static_cast<unsigned int>(texture_height),
                               1);
+            ++sample_index;
 
             int framebuffer_width {};
             int framebuffer_height {};
@@ -419,7 +431,8 @@ int main()
                 std::cout << static_cast<double>(num_frames) / elapsed
                           << " fps, "
                           << elapsed * 1000.0 / static_cast<double>(num_frames)
-                          << " ms/frame\n";
+                          << " ms/frame, " << sample_index
+                          << (sample_index > 1 ? " samples\n" : " sample\n");
                 num_frames = 0;
                 last_time = current_time;
             }
