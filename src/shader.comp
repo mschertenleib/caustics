@@ -5,6 +5,8 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(binding = 0, rgba32f) uniform image2D image;
 
 uniform uint sample_index;
+uniform vec2 world_size;
+uniform vec2 mouse;
 
 
 const float pi = 3.14159274;
@@ -25,6 +27,7 @@ float random(inout uint rng_state)
     rng_state ^= rng_state << 13;
     rng_state ^= rng_state >> 17;
     rng_state ^= rng_state << 5;
+    // NOTE: currently this can return 1.0
     return float(rng_state) / 4294967295.0;
 }
 
@@ -66,7 +69,26 @@ void main()
     const uint pixel_index = gl_GlobalInvocationID.y * image_size.x + gl_GlobalInvocationID.x;
     uint rng_state = hash(sample_index * image_size.x * image_size.y + pixel_index);
 
-    const vec4 color = vec4(random(rng_state), random(rng_state), random(rng_state), 1.0);
+    // Circle
+    const vec2 center = world_size * 0.5;
+    const float radius = world_size.x * 0.15;
+    // Light
+    const vec2 light_pos = mouse * world_size;
+    // Ray
+    const vec2 ray_origin = (vec2(gl_GlobalInvocationID.xy) + vec2(0.5)) / vec2(image_size) * world_size;
+    const vec2 to_light = light_pos - ray_origin;
+    const float dist_to_light = length(to_light);
+    const vec2 ray_direction = to_light / dist_to_light;
+    const float t = intersect_circle(ray_origin, ray_direction, center, radius);
+    vec4 color;
+    if (t > 0.0 && t < dist_to_light)
+    {
+        color = vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    else
+    {
+        color = vec4(vec3(min(0.05 / dist_to_light, 1.0)), 1.0);
+    }
 
     vec4 average_color = imageLoad(image, ivec2(gl_GlobalInvocationID.xy));
     average_color = (average_color * sample_index + color) / (sample_index + 1);

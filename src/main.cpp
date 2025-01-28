@@ -14,7 +14,6 @@ namespace
 {
 
 #define ENUMERATE_GL_FUNCTIONS(f)                                              \
-    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLENABLEPROC, glEnable);                                              \
     f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
     f(PFNGLCREATESHADERPROC, glCreateShader);                                  \
@@ -31,6 +30,7 @@ namespace
     f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
     f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
     f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
+    f(PFNGLUNIFORM2FPROC, glUniform2f);                                        \
     f(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
     f(PFNGLDELETETEXTURESPROC, glDeleteTextures);                              \
     f(PFNGLBINDTEXTUREPROC, glBindTexture);                                    \
@@ -368,8 +368,11 @@ int main()
         const auto program_id = create_compute_program("shader.comp");
         SCOPE_EXIT([program_id] { glDeleteProgram(program_id); });
 
-        const auto sample_index_loc =
+        const auto loc_sample_index =
             glGetUniformLocation(program_id, "sample_index");
+        const auto loc_world_size =
+            glGetUniformLocation(program_id, "world_size");
+        const auto loc_mouse = glGetUniformLocation(program_id, "mouse");
 
         constexpr int texture_width {320};
         constexpr int texture_height {240};
@@ -381,46 +384,70 @@ int main()
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
+        constexpr float world_width {1.0f};
+        constexpr float world_height {world_width *
+                                      static_cast<float>(texture_height) /
+                                      static_cast<float>(texture_width)};
+        unsigned int sample_index {0};
+        double last_xpos {};
+        double last_ypos {};
+
         double last_time {glfwGetTime()};
         int num_frames {0};
-
-        unsigned int sample_index {0};
 
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
-
-            glUseProgram(program_id);
-            glUniform1ui(sample_index_loc, sample_index);
-            glDispatchCompute(static_cast<unsigned int>(texture_width),
-                              static_cast<unsigned int>(texture_height),
-                              1);
-            ++sample_index;
 
             int framebuffer_width {};
             int framebuffer_height {};
             glfwGetFramebufferSize(
                 window, &framebuffer_width, &framebuffer_height);
 
-            glViewport(0, 0, framebuffer_width, framebuffer_height);
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
             const auto [x0, y0, x1, y1] =
                 centered_rectangle(texture_width,
                                    texture_height,
                                    framebuffer_width,
                                    framebuffer_height);
+
+            double xpos {};
+            double ypos {};
+            glfwGetCursorPos(window, &xpos, &ypos);
+            // Normalized mouse coordinates
+            const auto mouse_x = static_cast<float>((xpos - x0) / (x1 - x0));
+            const auto mouse_y = static_cast<float>((ypos - y0) / (y1 - y0));
+            if (xpos != last_xpos || ypos != last_ypos)
+            {
+                // If the mouse moved, reset render
+                sample_index = 0;
+            }
+            last_xpos = xpos;
+            last_ypos = ypos;
+
+            glViewport(0, 0, framebuffer_width, framebuffer_height);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            glUseProgram(program_id);
+            glUniform1ui(loc_sample_index, sample_index);
+            glUniform2f(loc_world_size, world_width, world_height);
+            glUniform2f(loc_mouse, mouse_x, mouse_y);
+            glDispatchCompute(static_cast<unsigned int>(texture_width),
+                              static_cast<unsigned int>(texture_height),
+                              1);
+            ++sample_index;
+
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+            // NOTE: we switch y0 and y1 to have (0, 0) in the top left corner
             glBlitFramebuffer(0,
                               0,
                               texture_width,
                               texture_height,
                               x0,
-                              y0,
-                              x1,
                               y1,
+                              x1,
+                              y0,
                               GL_COLOR_BUFFER_BIT,
                               GL_NEAREST);
 
