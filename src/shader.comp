@@ -12,6 +12,23 @@ uniform vec2 mouse;
 const float pi = 3.14159274;
 
 
+struct Circle
+{
+    vec2 center;
+    float radius;
+    vec3 color;
+    vec3 emissivity;
+    bool transparent;
+};
+
+Circle circles[] =
+{
+    Circle(vec2(0.8, 0.5), 0.03, vec3(0.75, 0.75, 0.75), vec3(6.0), false),
+    Circle(vec2(0.5, 0.3), 0.15, vec3(0.75, 0.25, 0.25), vec3(0.0), true),
+    Circle(vec2(0.8, 0.2), 0.05, vec3(0.25, 0.25, 0.75), vec3(0.0), true),
+};
+
+
 uint hash(uint x)
 {
     x += x << 10;
@@ -24,11 +41,16 @@ uint hash(uint x)
 
 float random(inout uint rng_state)
 {
+    // Returns a value uniformly sampled from [0.0, 1.0)
     rng_state ^= rng_state << 13;
     rng_state ^= rng_state >> 17;
     rng_state ^= rng_state << 5;
-    // NOTE: currently this can return 1.0
-    return float(rng_state) / 4294967295.0;
+    return float(rng_state) / 4294967296.0;
+}
+
+float max_component(vec3 v)
+{
+    return v.x > v.y && v.x > v.z ? v.x : v.y > v.z ? v.y : v.z;
 }
 
 float intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius)
@@ -58,6 +80,143 @@ float intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius)
     return 0.0;
 }
 
+bool trace(vec2 origin, vec2 direction, out float t, out uint circle_index)
+{
+    const float t_max = 1e6;
+    t = t_max;
+    for (uint i = 0; i < circles.length(); ++i)
+    {
+        const float intersection_t = intersect_circle(
+            origin, direction, circles[i].center, circles[i].radius);
+        if (intersection_t > 0.0 && intersection_t < t)
+        {
+            t = intersection_t;
+            circle_index = i;
+        }
+    }
+    return t < t_max;
+}
+
+// This uses the technique by Carsten Wächter and
+// Nikolaus Binder from "A Fast and Robust Method for Avoiding
+// Self-Intersection" from Ray Tracing Gems (version 1.7, 2020).
+// The normal can be negated if one wants the ray to pass through
+// the surface instead.
+vec2 offset_position_along_normal(vec2 position, vec2 normal)
+{
+    // Convert the normal to an integer offset.
+    const ivec2 of_i = ivec2(256.0 * normal);
+
+    // Offset each component of position using its binary representation.
+    // Handle the sign bits correctly.
+    const vec2 p_i = vec2(
+        intBitsToFloat(floatBitsToInt(position.x) + ((position.x < 0) ? -of_i.x : of_i.x)),
+        intBitsToFloat(floatBitsToInt(position.y) + ((position.y < 0) ? -of_i.y : of_i.y)));
+
+    // Use a floating-point offset instead for points near (0,0), the origin.
+    const float origin = 1.0 / 32.0;
+    const float float_scale = 1.0 / 65536.0;
+    return vec2(
+        abs(position.x) < origin ? position.x + float_scale * normal.x : p_i.x,
+        abs(position.y) < origin ? position.y + float_scale * normal.y : p_i.y);
+}
+
+vec2 reflect_diffuse(vec2 normal, inout uint rng_state)
+{
+    // Random point on a unit circle centered on the normal
+    const float theta = 2.0 * pi * random(rng_state);
+    const vec2 direction = normal + vec2(cos(theta), sin(theta));
+    return normalize(direction);
+}
+
+vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
+{
+    vec3 accumulated_color = vec3(0.0);
+    vec3 accumulated_reflectance = vec3(1.0);
+
+    for (uint depth = 0; depth < 16; ++depth)
+    {
+        float t;
+        uint circle_index;
+        const bool hit = trace(origin, direction, t, circle_index);
+
+        const vec3 emissivity = hit ? circles[circle_index].emissivity : vec3(0.1);
+
+        accumulated_color += accumulated_reflectance * emissivity;
+        if (!hit)
+        {
+            return accumulated_color;
+        }
+
+        vec3 color = circles[circle_index].color;
+        const float p = max_component(color);
+        if (random(rng_state) < p)
+        {
+            color /= p;
+        }
+        else
+        {
+            return accumulated_color;
+        }
+        accumulated_reflectance *= color;
+
+        const vec2 hit_pos = origin + t * direction;
+        const vec2 object_normal = normalize(hit_pos - circles[circle_index].center);
+        const bool into = dot(direction, object_normal) < 0.0;
+        const vec2 normal = into ? object_normal : -object_normal;
+
+        if (circles[circle_index].transparent)
+        {
+            const vec2 reflected_dir = direction - 2.0 * object_normal * dot(object_normal, direction);
+
+            const float n_air = 1.0;
+            const float n_glass = 1.5;
+            const float n_ratio = into ? n_air / n_glass : n_glass / n_air;
+            const float dir_dot_normal = dot(direction, normal);
+            const float cos2t = 1.0 - n_ratio * n_ratio * (1.0 - dir_dot_normal * dir_dot_normal);
+            // Total internal reflection
+            if (cos2t < 0.0)
+            {
+                origin = offset_position_along_normal(hit_pos, normal);
+                direction = reflected_dir;
+                continue;
+            }
+
+            const vec2 transmitted_dir = normalize(direction * n_ratio - object_normal *
+                ((into ? 1.0 : -1.0) * (dir_dot_normal * n_ratio + sqrt(cos2t))));
+
+            const float a = n_glass - n_air;
+            const float b = n_glass + n_air;
+            const float R0 = a * a / (b * b);
+            const float c = 1.0 - (into ? -dir_dot_normal : dot(transmitted_dir, object_normal));
+            const float Re = R0 + (1.0 - R0) * c * c * c * c * c;
+            const float Tr = 1.0 - Re;
+            const float P = 0.25 + 0.5 * Re;
+            const float RP = Re / P;
+            const float TP = Tr / (1.0 - P);
+            if (random(rng_state) < P)
+            {
+                accumulated_reflectance *= RP;
+                origin = offset_position_along_normal(hit_pos, normal);
+                direction = reflected_dir;
+            }
+            else
+            {
+                accumulated_reflectance *= TP;
+                origin = offset_position_along_normal(hit_pos, -normal);
+                direction = transmitted_dir;
+            }
+        }
+        else
+        {
+            origin = offset_position_along_normal(hit_pos, normal);
+            direction = reflect_diffuse(normal, rng_state);
+        }
+    }
+
+    return accumulated_color;
+}
+
 void main()
 {
     const uvec2 image_size = imageSize(image);
@@ -69,26 +228,13 @@ void main()
     const uint pixel_index = gl_GlobalInvocationID.y * image_size.x + gl_GlobalInvocationID.x;
     uint rng_state = hash(sample_index * image_size.x * image_size.y + pixel_index);
 
-    // Circle
-    const vec2 center = world_size * 0.5;
-    const float radius = world_size.x * 0.15;
-    // Light
-    const vec2 light_pos = mouse * world_size;
-    // Ray
-    const vec2 ray_origin = (vec2(gl_GlobalInvocationID.xy) + vec2(0.5)) / vec2(image_size) * world_size;
-    const vec2 to_light = light_pos - ray_origin;
-    const float dist_to_light = length(to_light);
-    const vec2 ray_direction = to_light / dist_to_light;
-    const float t = intersect_circle(ray_origin, ray_direction, center, radius);
-    vec4 color;
-    if (t > 0.0 && t < dist_to_light)
-    {
-        color = vec4(0.0, 0.0, 0.0, 1.0);
-    }
-    else
-    {
-        color = vec4(vec3(min(0.05 / dist_to_light, 1.0)), 1.0);
-    }
+    circles[0].center = mouse * world_size;
+
+    const vec2 ray_origin = (vec2(gl_GlobalInvocationID.xy) + vec2(random(rng_state), random(rng_state))) / vec2(image_size) * world_size;
+    const float angle = 2.0 * pi * random(rng_state);
+    const vec2 ray_direction = vec2(cos(angle), sin(angle));
+    const vec3 radiance_color = radiance(ray_origin, ray_direction, rng_state);
+    const vec4 color = vec4(radiance_color, 1.0);
 
     vec4 average_color = imageLoad(image, ivec2(gl_GlobalInvocationID.xy));
     average_color = (average_color * sample_index + color) / (sample_index + 1);

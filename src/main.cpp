@@ -357,7 +357,7 @@ int main()
         SCOPE_EXIT([window] { glfwDestroyWindow(window); });
 
         glfwMakeContextCurrent(window);
-        glfwSwapInterval(1);
+        glfwSwapInterval(0);
 
         load_gl_functions();
 
@@ -423,6 +423,11 @@ int main()
             }
             last_xpos = xpos;
             last_ypos = ypos;
+
+            if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+            {
+                sample_index = 0;
+            }
 
             glViewport(0, 0, framebuffer_width, framebuffer_height);
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
