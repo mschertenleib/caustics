@@ -359,6 +359,10 @@ int main()
         glfwMakeContextCurrent(window);
         glfwSwapInterval(0);
 
+        float x_scale {};
+        float y_scale {};
+        glfwGetWindowContentScale(window, &x_scale, &y_scale);
+
         load_gl_functions();
 
         glEnable(GL_DEBUG_OUTPUT);
@@ -414,8 +418,10 @@ int main()
             double ypos {};
             glfwGetCursorPos(window, &xpos, &ypos);
             // Normalized mouse coordinates
-            const auto mouse_x = static_cast<float>((xpos - x0) / (x1 - x0));
-            const auto mouse_y = static_cast<float>((ypos - y0) / (y1 - y0));
+            const auto mouse_x = static_cast<float>(
+                (xpos * static_cast<double>(x_scale) - x0) / (x1 - x0));
+            const auto mouse_y = static_cast<float>(
+                (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));
             if (xpos != last_xpos || ypos != last_ypos)
             {
                 // If the mouse moved, reset render
