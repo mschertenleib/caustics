@@ -42,6 +42,12 @@ namespace
     f(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);                            \
     f(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);                  \
     f(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus);              \
+    f(PFNGLGENBUFFERSPROC, glGenBuffers);                                      \
+    f(PFNGLDELETEBUFFERSPROC, glDeleteBuffers);                                \
+    f(PFNGLBINDBUFFERPROC, glBindBuffer);                                      \
+    f(PFNGLBUFFERDATAPROC, glBufferData);                                      \
+    f(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);                              \
+    f(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);                          \
     f(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
     f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
     f(PFNGLVIEWPORTPROC, glViewport);                                          \
@@ -331,6 +337,20 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return fbo_id;
 }
 
+[[nodiscard]] GLuint create_storage_buffer()
+{
+    GLuint ssbo_id {};
+    glGenBuffers(1, &ssbo_id);
+
+    constexpr GLsizeiptr size {64 * 2 * sizeof(float)};
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_id);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, size, nullptr, GL_DYNAMIC_READ);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ssbo_id);
+
+    return ssbo_id;
+}
+
 } // namespace
 
 int main()
@@ -388,13 +408,21 @@ int main()
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
+        const auto ssbo_id = create_storage_buffer();
+        SCOPE_EXIT([&ssbo_id] { glDeleteBuffers(1, &ssbo_id); });
+
         constexpr float world_width {1.0f};
         constexpr float world_height {world_width *
                                       static_cast<float>(texture_height) /
                                       static_cast<float>(texture_width)};
         unsigned int sample_index {0};
-        double last_xpos {};
-        double last_ypos {};
+
+        struct Vec2
+        {
+            float x;
+            float y;
+        };
+        std::vector<Vec2> positions;
 
         double last_time {glfwGetTime()};
         int num_frames {0};
@@ -422,13 +450,6 @@ int main()
                 (xpos * static_cast<double>(x_scale) - x0) / (x1 - x0));
             const auto mouse_y = static_cast<float>(
                 (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));
-            if (xpos != last_xpos || ypos != last_ypos)
-            {
-                // If the mouse moved, reset render
-                sample_index = 0;
-            }
-            last_xpos = xpos;
-            last_ypos = ypos;
 
             if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
             {
@@ -461,6 +482,25 @@ int main()
                               y0,
                               GL_COLOR_BUFFER_BIT,
                               GL_NEAREST);
+
+            glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+            unsigned int buf_length {};
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 4, &buf_length);
+            positions.resize(buf_length);
+            if (buf_length > 0)
+            {
+                glGetBufferSubData(
+                    GL_SHADER_STORAGE_BUFFER,
+                    8,
+                    static_cast<long int>(buf_length * sizeof(Vec2)),
+                    positions.data());
+
+                for (auto &[x, y] : positions)
+                {
+                    x = x * (x1 - x0) + x0;
+                    y = y * (y1 - y0) + y0;
+                }
+            }
 
             ++num_frames;
             const double current_time {glfwGetTime()};

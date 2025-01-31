@@ -2,7 +2,14 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(binding = 0, rgba32f) uniform image2D image;
+layout(rgba32f, binding = 0) uniform image2D image;
+
+layout(std430, binding = 1) buffer Buffer
+{
+    uint len;
+    vec2 positions[];
+} buf;
+
 
 uniform uint sample_index;
 uniform vec2 world_size;
@@ -134,13 +141,24 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
     vec3 accumulated_color = vec3(0.0);
     vec3 accumulated_reflectance = vec3(1.0);
 
+    if ((ivec2(mouse * vec2(imageSize(image))) == ivec2(gl_GlobalInvocationID.xy)))
+    {
+        buf.len = 0;
+    }
+
     for (uint depth = 0; depth < 16; ++depth)
     {
         float t;
         uint circle_index;
         const bool hit = trace(origin, direction, t, circle_index);
 
-        const vec3 emissivity = hit ? circles[circle_index].emissivity : vec3(0.1);
+        if ((ivec2(mouse * vec2(imageSize(image))) == ivec2(gl_GlobalInvocationID.xy)))
+        {
+            buf.positions[buf.len] = origin / world_size;
+            buf.len += 1;
+        }
+
+        const vec3 emissivity = hit ? circles[circle_index].emissivity : vec3(0.0);
 
         accumulated_color += accumulated_reflectance * emissivity;
         if (!hit)
@@ -164,7 +182,7 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         const vec2 object_normal = normalize(hit_pos - circles[circle_index].center);
         const bool into = dot(direction, object_normal) < 0.0;
         const vec2 normal = into ? object_normal : -object_normal;
-
+        
         if (circles[circle_index].transparent)
         {
             const vec2 reflected_dir = direction - 2.0 * object_normal * dot(object_normal, direction);
@@ -227,8 +245,6 @@ void main()
 
     const uint pixel_index = gl_GlobalInvocationID.y * image_size.x + gl_GlobalInvocationID.x;
     uint rng_state = hash(sample_index * image_size.x * image_size.y + pixel_index);
-
-    circles[0].center = mouse * world_size;
 
     const vec2 ray_origin = (vec2(gl_GlobalInvocationID.xy) + vec2(random(rng_state), random(rng_state))) / vec2(image_size) * world_size;
     const float angle = 2.0 * pi * random(rng_state);
