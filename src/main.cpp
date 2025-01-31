@@ -47,7 +47,14 @@ namespace
     f(PFNGLBINDBUFFERPROC, glBindBuffer);                                      \
     f(PFNGLBUFFERDATAPROC, glBufferData);                                      \
     f(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);                              \
+    f(PFNGLBUFFERSUBDATAPROC, glBufferSubData);                                \
     f(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);                          \
+    f(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);                            \
+    f(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);                      \
+    f(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
+    f(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);                    \
+    f(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);            \
+    f(PFNGLDRAWARRAYSPROC, glDrawArrays);                                      \
     f(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
     f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
     f(PFNGLVIEWPORTPROC, glViewport);                                          \
@@ -279,6 +286,36 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return program_id;
 }
 
+[[nodiscard]] GLuint create_vert_frag_program()
+{
+    constexpr auto vertex_shader = R"(#version 430
+    layout (location = 0) in vec2 vertex_position;
+    void main()
+    {
+        gl_Position = vec4(vertex_position, 0.0, 1.0);
+    })";
+
+    constexpr auto fragment_shader = R"(#version 430
+    out vec4 frag_color;
+    void main()
+    {
+        frag_color = vec4(1.0, 0.0, 1.0, 1.0);
+    })";
+
+    const auto vertex_shader_id =
+        create_shader(GL_VERTEX_SHADER, vertex_shader);
+    SCOPE_EXIT([vertex_shader_id] { glDeleteShader(vertex_shader_id); });
+
+    const auto fragment_shader_id =
+        create_shader(GL_FRAGMENT_SHADER, fragment_shader);
+    SCOPE_EXIT([fragment_shader_id] { glDeleteShader(fragment_shader_id); });
+
+    const auto program_id =
+        create_program(vertex_shader_id, fragment_shader_id);
+
+    return program_id;
+}
+
 [[nodiscard]] GLuint create_texture(GLsizei width, GLsizei height)
 {
     GLuint texture_id {};
@@ -354,12 +391,31 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return fbo_id;
 }
 
-[[nodiscard]] GLuint create_storage_buffer()
+[[nodiscard]] std::pair<GLuint, GLuint>
+create_vao_vbo(unsigned int num_vertices)
+{
+    GLuint vao {};
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+
+    GLuint vbo {};
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 num_vertices * 2 * sizeof(float),
+                 nullptr,
+                 GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+
+    return {vao, vbo};
+}
+
+[[nodiscard]] GLuint create_storage_buffer(unsigned int size)
 {
     GLuint ssbo_id {};
     glGenBuffers(1, &ssbo_id);
-
-    constexpr GLsizeiptr size {64 * 2 * sizeof(float)};
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_id);
     glBufferData(GL_SHADER_STORAGE_BUFFER, size, nullptr, GL_DYNAMIC_READ);
@@ -406,14 +462,16 @@ int main()
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
         glDebugMessageCallback(&gl_debug_callback, nullptr);
 
-        const auto program_id = create_compute_program("shader.comp");
-        SCOPE_EXIT([program_id] { glDeleteProgram(program_id); });
+        const auto compute_program_id = create_compute_program("shader.comp");
+        SCOPE_EXIT([compute_program_id]
+                   { glDeleteProgram(compute_program_id); });
 
         const auto loc_sample_index =
-            glGetUniformLocation(program_id, "sample_index");
+            glGetUniformLocation(compute_program_id, "sample_index");
         const auto loc_world_size =
-            glGetUniformLocation(program_id, "world_size");
-        const auto loc_mouse = glGetUniformLocation(program_id, "mouse");
+            glGetUniformLocation(compute_program_id, "world_size");
+        const auto loc_mouse =
+            glGetUniformLocation(compute_program_id, "mouse");
 
         constexpr int texture_width {320};
         constexpr int texture_height {240};
@@ -425,8 +483,16 @@ int main()
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-        const auto ssbo_id = create_storage_buffer();
+        // Debug visualization
+        constexpr unsigned int max_vertices {64};
+        constexpr unsigned int buffer_size {max_vertices * 2 * sizeof(float)};
+        const auto ssbo_id = create_storage_buffer(buffer_size);
         SCOPE_EXIT([&ssbo_id] { glDeleteBuffers(1, &ssbo_id); });
+        const auto debug_program_id = create_vert_frag_program();
+        SCOPE_EXIT([debug_program_id] { glDeleteProgram(debug_program_id); });
+        const auto [vao, vbo] = create_vao_vbo(max_vertices);
+        SCOPE_EXIT([&vao] { glDeleteVertexArrays(1, &vao); });
+        SCOPE_EXIT([&vbo] { glDeleteBuffers(1, &vbo); });
 
         constexpr float world_width {1.0f};
         constexpr float world_height {world_width *
@@ -477,7 +543,7 @@ int main()
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            glUseProgram(program_id);
+            glUseProgram(compute_program_id);
             glUniform1ui(loc_sample_index, sample_index);
             glUniform2f(loc_world_size, world_width, world_height);
             glUniform2f(loc_mouse, mouse_x, mouse_y);
@@ -500,26 +566,54 @@ int main()
                               GL_COLOR_BUFFER_BIT,
                               GL_NEAREST);
 
-            glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
-            unsigned int buf_length {};
-            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 4, &buf_length);
-            positions.resize(buf_length);
-            if (buf_length > 0)
+            // Debug visualization of a path
+            static bool waiting_for_release {false};
+            const auto key_state = glfwGetKey(window, GLFW_KEY_D);
+            if ((key_state == GLFW_PRESS) && !waiting_for_release)
             {
-                glGetBufferSubData(
-                    GL_SHADER_STORAGE_BUFFER,
-                    8,
-                    static_cast<long int>(buf_length * sizeof(Vec2)),
-                    positions.data());
-
-                for (auto &[x, y] : positions)
+                waiting_for_release = true;
+                glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+                unsigned int buf_length {};
+                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 4, &buf_length);
+                positions.resize(buf_length);
+                if (buf_length > 0)
                 {
-                    x = x * static_cast<float>(x1 - x0) +
-                        static_cast<float>(x0);
-                    y = y * static_cast<float>(y1 - y0) +
-                        static_cast<float>(y0);
+                    glGetBufferSubData(
+                        GL_SHADER_STORAGE_BUFFER,
+                        8,
+                        static_cast<long int>(buf_length * sizeof(Vec2)),
+                        positions.data());
+
+                    for (auto &[x, y] : positions)
+                    {
+                        x = (x * static_cast<float>(x1 - x0) +
+                             static_cast<float>(x0)) /
+                                static_cast<float>(framebuffer_width) * 2.0f -
+                            1.0f;
+                        y = (y * static_cast<float>(y1 - y0) +
+                             static_cast<float>(y0)) /
+                                static_cast<float>(framebuffer_height) * 2.0f -
+                            1.0f;
+                        y = -y; // Because the default pipeline places (0, 0) in
+                                // the bottom left
+                    }
+                    glBufferSubData(
+                        GL_ARRAY_BUFFER,
+                        0,
+                        static_cast<long int>(
+                            positions.size() *
+                            sizeof(decltype(positions)::value_type)),
+                        positions.data());
                 }
             }
+            else if ((key_state == GLFW_RELEASE) && waiting_for_release)
+            {
+                waiting_for_release = false;
+            }
+
+            glUseProgram(debug_program_id);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_LINE_STRIP, 0, static_cast<int>(positions.size()));
 
             ++num_frames;
             const double current_time {glfwGetTime()};
