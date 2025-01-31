@@ -219,16 +219,14 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     }
 }
 
-[[nodiscard]] GLuint create_compute_program(const char *file_name)
+[[nodiscard]] GLuint create_shader(GLenum type, const char *code)
 {
-    const auto shader_code = read_file(file_name);
-    const auto c_shader_code = shader_code.c_str();
+    const auto shader_id = glCreateShader(type);
+    SCOPE_FAIL([shader_id] { glDeleteShader(shader_id); });
 
-    const auto shader_id = glCreateShader(GL_COMPUTE_SHADER);
-    SCOPE_EXIT([shader_id] { glDeleteShader(shader_id); });
-
-    glShaderSource(shader_id, 1, &c_shader_code, nullptr);
+    glShaderSource(shader_id, 1, &code, nullptr);
     glCompileShader(shader_id);
+
     int success {};
     glGetShaderiv(shader_id, GL_COMPILE_STATUS, &success);
     if (!success)
@@ -242,11 +240,18 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
         throw std::runtime_error(oss.str());
     }
 
+    return shader_id;
+}
+
+[[nodiscard]] GLuint create_program(auto &&...shader_ids)
+{
     const auto program_id = glCreateProgram();
     SCOPE_FAIL([program_id] { glDeleteProgram(program_id); });
 
-    glAttachShader(program_id, shader_id);
+    (glAttachShader(program_id, shader_ids), ...);
     glLinkProgram(program_id);
+
+    int success {};
     glGetProgramiv(program_id, GL_LINK_STATUS, &success);
     if (!success)
     {
@@ -258,6 +263,18 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
         oss << "Program linking failed:\n" << message << '\n';
         throw std::runtime_error(oss.str());
     }
+
+    return program_id;
+}
+
+[[nodiscard]] GLuint create_compute_program(const char *file_name)
+{
+    const auto shader_code = read_file(file_name);
+    const auto c_shader_code = shader_code.c_str();
+    const auto shader_id = create_shader(GL_COMPUTE_SHADER, c_shader_code);
+    SCOPE_EXIT([shader_id] { glDeleteShader(shader_id); });
+
+    const auto program_id = create_program(shader_id);
 
     return program_id;
 }
@@ -497,8 +514,10 @@ int main()
 
                 for (auto &[x, y] : positions)
                 {
-                    x = x * (x1 - x0) + x0;
-                    y = y * (y1 - y0) + y0;
+                    x = x * static_cast<float>(x1 - x0) +
+                        static_cast<float>(x0);
+                    y = y * static_cast<float>(y1 - y0) +
+                        static_cast<float>(y0);
                 }
             }
 
