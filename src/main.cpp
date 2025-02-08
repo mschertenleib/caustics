@@ -177,6 +177,11 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                 const GLchar *message,
                                 [[maybe_unused]] const void *user_param)
 {
+    if (type == GL_DEBUG_TYPE_OTHER ||
+        severity == GL_DEBUG_SEVERITY_NOTIFICATION)
+    {
+        return;
+    }
     std::cerr << message << '\n';
 }
 
