@@ -40,12 +40,18 @@ add_executable(caustics src/main.cpp)
 target_compile_features(caustics PRIVATE cxx_std_20)
 target_link_libraries(caustics PRIVATE OpenGL::GL glfw)
 
+
 # NOTE: this custom target is for always copying the shaders to the binary directory
-add_custom_target(shaders ALL DEPENDS src/shader.comp)
-add_custom_command(TARGET shaders POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/src/shader.comp $<TARGET_FILE_DIR:caustics>
-)
+set(SHADERS src/trace.comp src/post.comp)
+add_custom_target(shaders ALL DEPENDS ${SHADERS})
+foreach (SHADER IN LISTS SHADERS)
+    cmake_path(APPEND CMAKE_SOURCE_DIR ${SHADER} OUTPUT_VARIABLE SHADER)
+    add_custom_command(TARGET shaders POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${SHADER} $<TARGET_FILE_DIR:caustics>
+    )
+endforeach ()
 add_dependencies(caustics shaders)
+
 
 set(clang_warnings
     -Wall

@@ -294,18 +294,18 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 [[nodiscard]] GLuint create_vert_frag_program()
 {
     constexpr auto vertex_shader = R"(#version 430
-    layout (location = 0) in vec2 vertex_position;
-    void main()
-    {
-        gl_Position = vec4(vertex_position, 0.0, 1.0);
-    })";
+layout (location = 0) in vec2 vertex_position;
+void main()
+{
+    gl_Position = vec4(vertex_position, 0.0, 1.0);
+})";
 
     constexpr auto fragment_shader = R"(#version 430
-    out vec4 frag_color;
-    void main()
-    {
-        frag_color = vec4(1.0, 0.0, 1.0, 1.0);
-    })";
+out vec4 frag_color;
+void main()
+{
+    frag_color = vec4(1.0, 0.0, 1.0, 1.0);
+})";
 
     const auto vertex_shader_id =
         create_shader(GL_VERTEX_SHADER, vertex_shader);
@@ -321,7 +321,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return program_id;
 }
 
-[[nodiscard]] GLuint create_texture(GLsizei width, GLsizei height)
+[[nodiscard]] GLuint create_accumulation_texture(GLsizei width, GLsizei height)
 {
     GLuint texture_id {};
     glGenTextures(1, &texture_id);
@@ -342,6 +342,30 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                  nullptr);
     glBindImageTexture(
         0, texture_id, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+
+    return texture_id;
+}
+
+[[nodiscard]] GLuint create_target_texture(GLsizei width, GLsizei height)
+{
+    GLuint texture_id {};
+    glGenTextures(1, &texture_id);
+
+    glBindTexture(GL_TEXTURE_2D, texture_id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_RGBA8, // FIXME: should this be sRGB ?
+                 width,
+                 height,
+                 0,
+                 GL_RGBA,
+                 GL_UNSIGNED_BYTE,
+                 nullptr);
+    glBindImageTexture(1, texture_id, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
     return texture_id;
 }
@@ -467,7 +491,7 @@ int main()
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
         glDebugMessageCallback(&gl_debug_callback, nullptr);
 
-        const auto compute_program_id = create_compute_program("shader.comp");
+        const auto compute_program_id = create_compute_program("trace.comp");
         SCOPE_EXIT([compute_program_id]
                    { glDeleteProgram(compute_program_id); });
 
@@ -478,12 +502,22 @@ int main()
         const auto loc_mouse =
             glGetUniformLocation(compute_program_id, "mouse");
 
+        const auto post_program_id = create_compute_program("post.comp");
+        SCOPE_EXIT([post_program_id] { glDeleteProgram(post_program_id); });
+
         constexpr int texture_width {320};
         constexpr int texture_height {240};
-        const auto texture_id = create_texture(texture_width, texture_height);
-        SCOPE_EXIT([&texture_id] { glDeleteTextures(1, &texture_id); });
+        const auto accumulation_texture_id =
+            create_accumulation_texture(texture_width, texture_height);
+        SCOPE_EXIT([&accumulation_texture_id]
+                   { glDeleteTextures(1, &accumulation_texture_id); });
 
-        const auto fbo_id = create_framebuffer(texture_id);
+        const auto target_texture_id =
+            create_target_texture(texture_width, texture_height);
+        SCOPE_EXIT([&target_texture_id]
+                   { glDeleteTextures(1, &target_texture_id); });
+
+        const auto fbo_id = create_framebuffer(target_texture_id);
         SCOPE_EXIT([&fbo_id] { glDeleteFramebuffers(1, &fbo_id); });
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -559,7 +593,15 @@ int main()
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-            // NOTE: we switch y0 and y1 to have (0, 0) in the top left corner
+            glUseProgram(post_program_id);
+            glDispatchCompute(static_cast<unsigned int>(texture_width),
+                              static_cast<unsigned int>(texture_height),
+                              1);
+
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+            // NOTE: we switch y0 and y1 to have (0, 0) in the
+            // top left corner
             glBlitFramebuffer(0,
                               0,
                               texture_width,
@@ -599,7 +641,8 @@ int main()
                              static_cast<float>(y0)) /
                                 static_cast<float>(framebuffer_height) * 2.0f -
                             1.0f;
-                        y = -y; // Because the default pipeline places (0, 0) in
+                        y = -y; // Because the default
+                                // pipeline places (0, 0) in
                                 // the bottom left
                     }
                     glBufferSubData(
