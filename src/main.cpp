@@ -1,6 +1,7 @@
 #define GLFW_INCLUDE_GLCOREARB
 #include <GLFW/glfw3.h>
 
+#include <cassert>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -453,6 +454,13 @@ create_vao_vbo(unsigned int num_vertices)
     return ssbo_id;
 }
 
+[[nodiscard]] constexpr unsigned int align_up(unsigned int value,
+                                              unsigned int alignment) noexcept
+{
+    assert((alignment & (alignment - 1)) == 0);
+    return (value + (alignment - 1)) & ~(alignment - 1);
+}
+
 } // namespace
 
 int main()
@@ -594,8 +602,8 @@ int main()
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
             glUseProgram(post_program_id);
-            glDispatchCompute(static_cast<unsigned int>(texture_width),
-                              static_cast<unsigned int>(texture_height),
+            glDispatchCompute(align_up(texture_width, 16) / 16,
+                              align_up(texture_height, 16) / 16,
                               1);
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
