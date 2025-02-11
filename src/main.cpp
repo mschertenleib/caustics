@@ -530,29 +530,11 @@ int main()
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-        // Debug visualization
-        constexpr unsigned int max_vertices {64};
-        constexpr unsigned int buffer_size {max_vertices * 2 * sizeof(float)};
-        const auto ssbo_id = create_storage_buffer(buffer_size);
-        SCOPE_EXIT([&ssbo_id] { glDeleteBuffers(1, &ssbo_id); });
-        const auto debug_program_id = create_vert_frag_program();
-        SCOPE_EXIT([debug_program_id] { glDeleteProgram(debug_program_id); });
-        const auto [vao, vbo] = create_vao_vbo(max_vertices);
-        SCOPE_EXIT([&vao] { glDeleteVertexArrays(1, &vao); });
-        SCOPE_EXIT([&vbo] { glDeleteBuffers(1, &vbo); });
-
         constexpr float world_width {1.0f};
         constexpr float world_height {world_width *
                                       static_cast<float>(texture_height) /
                                       static_cast<float>(texture_width)};
         unsigned int sample_index {0};
-
-        struct Vec2
-        {
-            float x;
-            float y;
-        };
-        std::vector<Vec2> positions;
 
         double last_time {glfwGetTime()};
         int num_frames {0};
@@ -594,17 +576,19 @@ int main()
             glUniform1ui(loc_sample_index, sample_index);
             glUniform2f(loc_world_size, world_width, world_height);
             glUniform2f(loc_mouse, mouse_x, mouse_y);
-            glDispatchCompute(static_cast<unsigned int>(texture_width),
-                              static_cast<unsigned int>(texture_height),
-                              1);
+            constexpr unsigned int num_groups_x {
+                align_up(texture_width, 16) / 16,
+            };
+            constexpr unsigned int num_groups_y {
+                align_up(texture_height, 16) / 16,
+            };
+            glDispatchCompute(num_groups_x, num_groups_y, 1);
             ++sample_index;
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
             glUseProgram(post_program_id);
-            glDispatchCompute(align_up(texture_width, 16) / 16,
-                              align_up(texture_height, 16) / 16,
-                              1);
+            glDispatchCompute(num_groups_x, num_groups_y, 1);
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
@@ -620,56 +604,6 @@ int main()
                               y0,
                               GL_COLOR_BUFFER_BIT,
                               GL_NEAREST);
-
-            // Debug visualization of a path
-            static bool waiting_for_release {false};
-            const auto key_state = glfwGetKey(window, GLFW_KEY_D);
-            if ((key_state == GLFW_PRESS) && !waiting_for_release)
-            {
-                waiting_for_release = true;
-                glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
-                unsigned int buf_length {};
-                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 4, &buf_length);
-                positions.resize(buf_length);
-                if (buf_length > 0)
-                {
-                    glGetBufferSubData(
-                        GL_SHADER_STORAGE_BUFFER,
-                        8,
-                        static_cast<long int>(buf_length * sizeof(Vec2)),
-                        positions.data());
-
-                    for (auto &[x, y] : positions)
-                    {
-                        x = (x * static_cast<float>(x1 - x0) +
-                             static_cast<float>(x0)) /
-                                static_cast<float>(framebuffer_width) * 2.0f -
-                            1.0f;
-                        y = (y * static_cast<float>(y1 - y0) +
-                             static_cast<float>(y0)) /
-                                static_cast<float>(framebuffer_height) * 2.0f -
-                            1.0f;
-                        y = -y; // Because the default
-                                // pipeline places (0, 0) in
-                                // the bottom left
-                    }
-                    glBufferSubData(
-                        GL_ARRAY_BUFFER,
-                        0,
-                        static_cast<long int>(
-                            positions.size() *
-                            sizeof(decltype(positions)::value_type)),
-                        positions.data());
-                }
-            }
-            else if ((key_state == GLFW_RELEASE) && waiting_for_release)
-            {
-                waiting_for_release = false;
-            }
-
-            glUseProgram(debug_program_id);
-            glBindVertexArray(vao);
-            glDrawArrays(GL_LINE_STRIP, 0, static_cast<int>(positions.size()));
 
             ++num_frames;
             const double current_time {glfwGetTime()};
