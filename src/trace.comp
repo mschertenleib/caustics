@@ -51,11 +51,11 @@ Circle circles[] =
     Circle(vec2(0.8, 0.5), 0.03, Material(vec3(0.75, 0.75, 0.75), vec3(6.0), DIFFUSE)),
     Circle(vec2(0.5, 0.3), 0.15, Material(vec3(0.75, 0.25, 0.25), vec3(0.0), DIELECTRIC)),
     Circle(vec2(0.8, 0.2), 0.05, Material(vec3(0.25, 0.25, 0.75), vec3(0.0), DIELECTRIC)),
-    Circle(vec2(0.2, 0.07) + 100.0 * vec2(cos(-2.2), sin(-2.2)), 100.0, Material(vec3(1.0, 1.0, 1.0), vec3(0.0), SPECULAR)),
 };
 Line lines[] =
 {
-    Line(vec2(0.1, 0.4), vec2(0.4, 0.6), Material(vec3(1.0, 1.0, 1.0), vec3(0.0), SPECULAR))
+    Line(vec2(0.1, 0.2), vec2(0.35, 0.05), Material(vec3(1.0, 1.0, 1.0), vec3(0.0), SPECULAR)),
+    Line(vec2(0.1, 0.4), vec2(0.4, 0.6), Material(vec3(1.0, 1.0, 1.0), vec3(0.0), DIFFUSE)),
 };
 
 uint hash(uint x)
@@ -202,13 +202,15 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         uint geometry_index;
         const bool hit = intersect(origin, direction, t, geometry_type, geometry_index);
         // FIXME: this is just a quick fix
-        if (!hit || geometry_type != GEOMETRY_CIRCLE)
+        if (!hit)
         {
             return accumulated_color;
         }
 
         // FIXME: this is undefined if there is no hit !!
-        const Material material = circles[geometry_index].material;
+        const Material material = geometry_type == GEOMETRY_CIRCLE
+            ? circles[geometry_index].material
+            : lines[geometry_index].material;
 
         const vec3 emissivity = hit ? material.emissivity : vec3(0.0);
 
@@ -231,7 +233,17 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         accumulated_reflectance *= color;
 
         const vec2 hit_pos = origin + t * direction;
-        const vec2 object_normal = normalize(hit_pos - circles[geometry_index].center);
+        vec2 object_normal;
+        if (geometry_type == GEOMETRY_CIRCLE)
+        {
+            object_normal = normalize(hit_pos - circles[geometry_index].center);
+        }
+        else
+        {
+            const vec2 line_dir = normalize(lines[geometry_index].b - lines[geometry_index].a);
+            object_normal = vec2(-line_dir.y, line_dir.x);
+        }
+
         const bool into = dot(direction, object_normal) < 0.0;
         const vec2 normal = into ? object_normal : -object_normal;
         
@@ -251,6 +263,8 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         }
         case DIELECTRIC:
         {
+            // FIXME: this is broken for non-circles (because only circles have a defined
+            // "inside" and "outside" for now)
             const vec2 reflected_dir = direction - 2.0 * object_normal * dot(object_normal, direction);
 
             const float n_air = 1.0;
