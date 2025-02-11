@@ -62,7 +62,12 @@ namespace
     f(PFNGLCLEARCOLORPROC, glClearColor);                                      \
     f(PFNGLCLEARPROC, glClear);                                                \
     f(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);                                \
-    f(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);
+    f(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);                            \
+    f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
+    f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
+    f(PFNGLBEGINQUERYPROC, glBeginQuery);                                      \
+    f(PFNGLENDQUERYPROC, glEndQuery);                                          \
+    f(PFNGLGETQUERYOBJECTI64VPROC, glGetQueryObjecti64v);
 
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
@@ -163,7 +168,8 @@ void glfw_error_callback(int error, const char *description)
 void load_gl_functions()
 {
 #define LOAD_GL_FUNCTION(type, name)                                           \
-    name = reinterpret_cast<type>(glfwGetProcAddress(#name))
+    name = reinterpret_cast<type>(glfwGetProcAddress(#name));                  \
+    assert(name != nullptr)
 
     ENUMERATE_GL_FUNCTIONS(LOAD_GL_FUNCTION)
 
@@ -292,7 +298,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return program_id;
 }
 
-[[nodiscard]] GLuint create_vert_frag_program()
+[[maybe_unused]] [[nodiscard]] GLuint create_vert_frag_program()
 {
     constexpr auto vertex_shader = R"(#version 430
 layout (location = 0) in vec2 vertex_position;
@@ -421,7 +427,7 @@ void main()
     return fbo_id;
 }
 
-[[nodiscard]] std::pair<GLuint, GLuint>
+[[maybe_unused]] [[nodiscard]] std::pair<GLuint, GLuint>
 create_vao_vbo(unsigned int num_vertices)
 {
     GLuint vao {};
@@ -442,7 +448,7 @@ create_vao_vbo(unsigned int num_vertices)
     return {vao, vbo};
 }
 
-[[nodiscard]] GLuint create_storage_buffer(unsigned int size)
+[[maybe_unused]] [[nodiscard]] GLuint create_storage_buffer(unsigned int size)
 {
     GLuint ssbo_id {};
     glGenBuffers(1, &ssbo_id);
@@ -461,166 +467,192 @@ create_vao_vbo(unsigned int num_vertices)
     return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
+void run()
+{
+    glfwSetErrorCallback(&glfw_error_callback);
+
+    if (!glfwInit())
+    {
+        throw std::runtime_error("Failed to initialize GLFW");
+    }
+    SCOPE_EXIT([] { glfwTerminate(); });
+
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
+    const auto window =
+        glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
+    if (window == nullptr)
+    {
+        throw std::runtime_error("Failed to create GLFW window");
+    }
+    SCOPE_EXIT([window] { glfwDestroyWindow(window); });
+
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    float x_scale {};
+    float y_scale {};
+    glfwGetWindowContentScale(window, &x_scale, &y_scale);
+
+    load_gl_functions();
+
+    glEnable(GL_DEBUG_OUTPUT);
+    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    glDebugMessageCallback(&gl_debug_callback, nullptr);
+
+    const auto compute_program_id = create_compute_program("trace.comp");
+    SCOPE_EXIT([compute_program_id] { glDeleteProgram(compute_program_id); });
+
+    const auto loc_sample_index =
+        glGetUniformLocation(compute_program_id, "sample_index");
+    const auto loc_samples_per_frame =
+        glGetUniformLocation(compute_program_id, "samples_per_frame");
+    const auto loc_world_size =
+        glGetUniformLocation(compute_program_id, "world_size");
+    const auto loc_mouse = glGetUniformLocation(compute_program_id, "mouse");
+
+    const auto post_program_id = create_compute_program("post.comp");
+    SCOPE_EXIT([post_program_id] { glDeleteProgram(post_program_id); });
+
+    constexpr int texture_width {320};
+    constexpr int texture_height {240};
+    const auto accumulation_texture_id =
+        create_accumulation_texture(texture_width, texture_height);
+    SCOPE_EXIT([&accumulation_texture_id]
+               { glDeleteTextures(1, &accumulation_texture_id); });
+
+    const auto target_texture_id =
+        create_target_texture(texture_width, texture_height);
+    SCOPE_EXIT([&target_texture_id]
+               { glDeleteTextures(1, &target_texture_id); });
+
+    const auto fbo_id = create_framebuffer(target_texture_id);
+    SCOPE_EXIT([&fbo_id] { glDeleteFramebuffers(1, &fbo_id); });
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+    GLuint query_id {};
+    glGenQueries(1, &query_id);
+    SCOPE_EXIT([&query_id] { glDeleteQueries(1, &query_id); });
+
+    constexpr float world_width {1.0f};
+    constexpr float world_height {world_width *
+                                  static_cast<float>(texture_height) /
+                                  static_cast<float>(texture_width)};
+    unsigned int sample_index {0};
+    unsigned int samples_per_frame {1};
+
+    double last_time {glfwGetTime()};
+    int num_frames {0};
+
+    while (!glfwWindowShouldClose(window))
+    {
+        glfwPollEvents();
+
+        int framebuffer_width {};
+        int framebuffer_height {};
+        glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
+
+        const auto [x0, y0, x1, y1] = centered_rectangle(texture_width,
+                                                         texture_height,
+                                                         framebuffer_width,
+                                                         framebuffer_height);
+
+        double xpos {};
+        double ypos {};
+        glfwGetCursorPos(window, &xpos, &ypos);
+        // Normalized mouse coordinates
+        const auto mouse_x = static_cast<float>(
+            (xpos * static_cast<double>(x_scale) - x0) / (x1 - x0));
+        const auto mouse_y = static_cast<float>(
+            (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));
+
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+        {
+            sample_index = 0;
+        }
+
+        glBeginQuery(GL_TIME_ELAPSED, query_id);
+
+        glViewport(0, 0, framebuffer_width, framebuffer_height);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(compute_program_id);
+        glUniform1ui(loc_sample_index, sample_index);
+        glUniform1ui(loc_samples_per_frame, samples_per_frame);
+        glUniform2f(loc_world_size, world_width, world_height);
+        glUniform2f(loc_mouse, mouse_x, mouse_y);
+        constexpr unsigned int num_groups_x {
+            align_up(texture_width, 16) / 16,
+        };
+        constexpr unsigned int num_groups_y {
+            align_up(texture_height, 16) / 16,
+        };
+        glDispatchCompute(num_groups_x, num_groups_y, 1);
+        sample_index += samples_per_frame;
+
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        glUseProgram(post_program_id);
+        glDispatchCompute(num_groups_x, num_groups_y, 1);
+
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        // NOTE: we switch y0 and y1 to have (0, 0) in the
+        // top left corner
+        glBlitFramebuffer(0,
+                          0,
+                          texture_width,
+                          texture_height,
+                          x0,
+                          y1,
+                          x1,
+                          y0,
+                          GL_COLOR_BUFFER_BIT,
+                          GL_NEAREST);
+
+        ++num_frames;
+        const double current_time {glfwGetTime()};
+        if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
+        {
+            std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
+                      << elapsed * 1000.0 / static_cast<double>(num_frames)
+                      << " ms/frame, " << sample_index
+                      << (sample_index > 1 ? " samples, " : " sample, ")
+                      << samples_per_frame
+                      << (samples_per_frame > 1 ? " samples/frame\n"
+                                                : " sample/frame\n");
+            num_frames = 0;
+            last_time = current_time;
+        }
+
+        glEndQuery(GL_TIME_ELAPSED);
+
+        glfwSwapBuffers(window);
+
+        GLint64 elapsed_ns {};
+        glGetQueryObjecti64v(query_id, GL_QUERY_RESULT, &elapsed_ns);
+        const double elapsed {static_cast<double>(elapsed_ns) / 1e9};
+        constexpr double target_compute_per_frame {0.014};
+        const auto error = target_compute_per_frame - elapsed;
+        const auto samples_per_frame_f =
+            static_cast<double>(samples_per_frame) + 100.0 * error;
+        samples_per_frame = static_cast<unsigned int>(
+            std::max(error > 0.0 ? std::ceil(samples_per_frame_f)
+                                 : std::floor(samples_per_frame_f),
+                     1.0));
+    }
+}
+
 } // namespace
 
 int main()
 {
     try
     {
-        glfwSetErrorCallback(&glfw_error_callback);
-
-        if (!glfwInit())
-        {
-            return EXIT_FAILURE;
-        }
-        SCOPE_EXIT([] { glfwTerminate(); });
-
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
-        const auto window =
-            glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
-        if (window == nullptr)
-        {
-            return EXIT_FAILURE;
-        }
-        SCOPE_EXIT([window] { glfwDestroyWindow(window); });
-
-        glfwMakeContextCurrent(window);
-        glfwSwapInterval(0);
-
-        float x_scale {};
-        float y_scale {};
-        glfwGetWindowContentScale(window, &x_scale, &y_scale);
-
-        load_gl_functions();
-
-        glEnable(GL_DEBUG_OUTPUT);
-        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
-        glDebugMessageCallback(&gl_debug_callback, nullptr);
-
-        const auto compute_program_id = create_compute_program("trace.comp");
-        SCOPE_EXIT([compute_program_id]
-                   { glDeleteProgram(compute_program_id); });
-
-        const auto loc_sample_index =
-            glGetUniformLocation(compute_program_id, "sample_index");
-        const auto loc_world_size =
-            glGetUniformLocation(compute_program_id, "world_size");
-        const auto loc_mouse =
-            glGetUniformLocation(compute_program_id, "mouse");
-
-        const auto post_program_id = create_compute_program("post.comp");
-        SCOPE_EXIT([post_program_id] { glDeleteProgram(post_program_id); });
-
-        constexpr int texture_width {320};
-        constexpr int texture_height {240};
-        const auto accumulation_texture_id =
-            create_accumulation_texture(texture_width, texture_height);
-        SCOPE_EXIT([&accumulation_texture_id]
-                   { glDeleteTextures(1, &accumulation_texture_id); });
-
-        const auto target_texture_id =
-            create_target_texture(texture_width, texture_height);
-        SCOPE_EXIT([&target_texture_id]
-                   { glDeleteTextures(1, &target_texture_id); });
-
-        const auto fbo_id = create_framebuffer(target_texture_id);
-        SCOPE_EXIT([&fbo_id] { glDeleteFramebuffers(1, &fbo_id); });
-
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-
-        constexpr float world_width {1.0f};
-        constexpr float world_height {world_width *
-                                      static_cast<float>(texture_height) /
-                                      static_cast<float>(texture_width)};
-        unsigned int sample_index {0};
-
-        double last_time {glfwGetTime()};
-        int num_frames {0};
-
-        while (!glfwWindowShouldClose(window))
-        {
-            glfwPollEvents();
-
-            int framebuffer_width {};
-            int framebuffer_height {};
-            glfwGetFramebufferSize(
-                window, &framebuffer_width, &framebuffer_height);
-
-            const auto [x0, y0, x1, y1] =
-                centered_rectangle(texture_width,
-                                   texture_height,
-                                   framebuffer_width,
-                                   framebuffer_height);
-
-            double xpos {};
-            double ypos {};
-            glfwGetCursorPos(window, &xpos, &ypos);
-            // Normalized mouse coordinates
-            const auto mouse_x = static_cast<float>(
-                (xpos * static_cast<double>(x_scale) - x0) / (x1 - x0));
-            const auto mouse_y = static_cast<float>(
-                (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));
-
-            if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
-            {
-                sample_index = 0;
-            }
-
-            glViewport(0, 0, framebuffer_width, framebuffer_height);
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-
-            glUseProgram(compute_program_id);
-            glUniform1ui(loc_sample_index, sample_index);
-            glUniform2f(loc_world_size, world_width, world_height);
-            glUniform2f(loc_mouse, mouse_x, mouse_y);
-            constexpr unsigned int num_groups_x {
-                align_up(texture_width, 16) / 16,
-            };
-            constexpr unsigned int num_groups_y {
-                align_up(texture_height, 16) / 16,
-            };
-            glDispatchCompute(num_groups_x, num_groups_y, 1);
-            ++sample_index;
-
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-            glUseProgram(post_program_id);
-            glDispatchCompute(num_groups_x, num_groups_y, 1);
-
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-            // NOTE: we switch y0 and y1 to have (0, 0) in the
-            // top left corner
-            glBlitFramebuffer(0,
-                              0,
-                              texture_width,
-                              texture_height,
-                              x0,
-                              y1,
-                              x1,
-                              y0,
-                              GL_COLOR_BUFFER_BIT,
-                              GL_NEAREST);
-
-            ++num_frames;
-            const double current_time {glfwGetTime()};
-            if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
-            {
-                std::cout << static_cast<double>(num_frames) / elapsed
-                          << " fps, "
-                          << elapsed * 1000.0 / static_cast<double>(num_frames)
-                          << " ms/frame, " << sample_index
-                          << (sample_index > 1 ? " samples\n" : " sample\n");
-                num_frames = 0;
-                last_time = current_time;
-            }
-
-            glfwSwapBuffers(window);
-        }
-
+        run();
         return EXIT_SUCCESS;
     }
     catch (const std::exception &e)

@@ -8,6 +8,7 @@ layout(rgba32f, binding = 0) uniform image2D image;
 // TODO: we might want to be more general and allow any camera position and zoom level,
 // as this would only require changing the pixel to world position mapping and is trivial.
 uniform uint sample_index;
+uniform uint samples_per_frame;
 uniform vec2 world_size;
 uniform vec2 mouse;
 
@@ -308,14 +309,16 @@ void main()
     const uint pixel_index = gl_GlobalInvocationID.y * image_size.x + gl_GlobalInvocationID.x;
     uint rng_state = hash(pixel_index) + hash(sample_index);
 
-    const vec2 ray_origin = (vec2(gl_GlobalInvocationID.xy) + vec2(random(rng_state), random(rng_state))) / vec2(image_size) * world_size;
-    const float angle = 2.0 * PI * random(rng_state);
-    const vec2 ray_direction = vec2(cos(angle), sin(angle));
-
-    const vec3 radiance_color = radiance(ray_origin, ray_direction, rng_state);
-    const vec4 color = vec4(radiance_color, 1.0);
-
+    vec4 accumulated_color = vec4(0.0);
+    for (uint i = 0; i < samples_per_frame; ++i)
+    {
+        const vec2 ray_origin = (vec2(gl_GlobalInvocationID.xy) + vec2(random(rng_state), random(rng_state))) / vec2(image_size) * world_size;
+        const float angle = 2.0 * PI * random(rng_state);
+        const vec2 ray_direction = vec2(cos(angle), sin(angle));
+        accumulated_color += vec4(radiance(ray_origin, ray_direction, rng_state), 1.0);
+    }
+    
     vec4 average_color = imageLoad(image, ivec2(gl_GlobalInvocationID.xy));
-    average_color = (average_color * sample_index + color) / (sample_index + 1);
+    average_color = (average_color * sample_index + accumulated_color) / (sample_index + samples_per_frame);
     imageStore(image, ivec2(gl_GlobalInvocationID.xy), average_color);
 }
