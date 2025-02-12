@@ -108,22 +108,6 @@ float max_component(vec3 v)
     return v.x > v.y && v.x > v.z ? v.x : v.y > v.z ? v.y : v.z;
 }
 
-float wrap(float angle)
-{
-    if (angle < -PI)
-    {
-        return angle + 2.0 * PI;
-    }
-    else if (angle > PI)
-    {
-        return angle - 2.0 * PI;
-    }
-    else
-    {
-        return angle;
-    }
-}
-
 bool intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius, inout float t)
 {
     const vec2 oc = center - origin;
