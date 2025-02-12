@@ -36,8 +36,16 @@ CPMAddPackage(
 )
 
 
+CPMAddPackage(
+    GITHUB_REPOSITORY nothings/stb
+    GIT_TAG f4a71b1
+    DOWNLOAD_ONLY YES
+)
+
+
 add_executable(caustics src/main.cpp)
 target_compile_features(caustics PRIVATE cxx_std_20)
+target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(caustics PRIVATE OpenGL::GL glfw)
 
 

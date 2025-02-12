@@ -1,3 +1,6 @@
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
 #define GLFW_INCLUDE_GLCOREARB
 #include <GLFW/glfw3.h>
 
@@ -67,7 +70,8 @@ namespace
     f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
     f(PFNGLBEGINQUERYPROC, glBeginQuery);                                      \
     f(PFNGLENDQUERYPROC, glEndQuery);                                          \
-    f(PFNGLGETQUERYOBJECTI64VPROC, glGetQueryObjecti64v);
+    f(PFNGLGETQUERYOBJECTI64VPROC, glGetQueryObjecti64v);                      \
+    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);
 
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
@@ -467,6 +471,28 @@ create_vao_vbo(unsigned int num_vertices)
     return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
+void save_as_png(const char *file_name, int width, int height)
+{
+    std::cout << "Saving " << width << " x " << height << " image to \""
+              << file_name << "\"... " << std::flush;
+
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
+                                     static_cast<std::size_t>(height) * 4);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+    const auto write_result =
+        stbi_write_png(file_name, width, height, 4, pixels.data(), width * 4);
+    if (write_result == 0)
+    {
+        std::ostringstream message;
+        message << "Failed to write PNG image to \"" << file_name << '\"';
+        throw std::runtime_error(message.str());
+    }
+
+    std::cout << "Saved" << std::endl;
+}
+
 void run()
 {
     glfwSetErrorCallback(&glfw_error_callback);
@@ -573,6 +599,17 @@ void run()
             sample_index = 0;
         }
 
+        if (static bool pressed {false};
+            glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !pressed)
+        {
+            pressed = true;
+            save_as_png("out.png", texture_width, texture_height);
+        }
+        else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_RELEASE)
+        {
+            pressed = false;
+        }
+
         glBeginQuery(GL_TIME_ELAPSED, query_id);
 
         glViewport(0, 0, framebuffer_width, framebuffer_height);
@@ -657,11 +694,13 @@ int main()
     }
     catch (const std::exception &e)
     {
+        std::cout.flush();
         std::cerr << "Exception thrown: " << e.what() << '\n';
         return EXIT_FAILURE;
     }
     catch (...)
     {
+        std::cout.flush();
         std::cerr << "Unknown exception thrown\n";
         return EXIT_FAILURE;
     }
