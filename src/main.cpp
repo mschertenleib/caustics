@@ -6,12 +6,15 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <numbers>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace
@@ -71,7 +74,8 @@ namespace
     f(PFNGLBEGINQUERYPROC, glBeginQuery);                                      \
     f(PFNGLENDQUERYPROC, glEndQuery);                                          \
     f(PFNGLGETQUERYOBJECTI64VPROC, glGetQueryObjecti64v);                      \
-    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);
+    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
+    f(PFNGLFINISHPROC, glFinish);
 
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
@@ -150,18 +154,49 @@ struct Rectangle
     int y1;
 };
 
+enum struct Material_type
+{
+    diffuse,
+    specular,
+    dielectric
+};
+
+struct Material
+{
+    alignas(16) float albedo[3];
+    alignas(16) float emissivity[3];
+    alignas(4) Material_type type;
+};
+
 struct Circle
 {
-    float cx;
-    float cy;
-    float r;
+    alignas(16) float center[2];
+    float radius;
+    unsigned int material_id;
+};
+
+struct Line
+{
+    alignas(16) float a[2];
+    alignas(8) float b[2];
+    unsigned int material_id;
+};
+
+struct Arc
+{
+    alignas(16) float center[2];
+    float radius;
+    float angle_min;
+    float angle_max;
+    unsigned int material_id;
 };
 
 struct Scene
 {
-    float width;
-    float height;
+    std::vector<Material> materials;
     std::vector<Circle> circles;
+    std::vector<Line> lines;
+    std::vector<Arc> arcs;
 };
 
 void glfw_error_callback(int error, const char *description)
@@ -181,9 +216,9 @@ void load_gl_functions()
 }
 
 void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
-                                [[maybe_unused]] GLenum type,
+                                GLenum type,
                                 [[maybe_unused]] GLuint id,
-                                [[maybe_unused]] GLenum severity,
+                                GLenum severity,
                                 [[maybe_unused]] GLsizei length,
                                 const GLchar *message,
                                 [[maybe_unused]] const void *user_param)
@@ -376,7 +411,7 @@ void main()
                  GL_RGBA,
                  GL_UNSIGNED_BYTE,
                  nullptr);
-    glBindImageTexture(1, texture_id, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(5, texture_id, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
     return texture_id;
 }
@@ -476,7 +511,8 @@ void save_as_png(const char *file_name, int width, int height)
     std::cout << "Saving " << width << " x " << height << " image to \""
               << file_name << "\"... " << std::flush;
 
-    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    glFinish();
+
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
                                      static_cast<std::size_t>(height) * 4);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -527,45 +563,93 @@ void run()
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     glDebugMessageCallback(&gl_debug_callback, nullptr);
 
-    const auto compute_program_id = create_compute_program("trace.comp");
-    SCOPE_EXIT([compute_program_id] { glDeleteProgram(compute_program_id); });
+    int texture_width {320};
+    int texture_height {240};
+    float view_x {0.5f};
+    float view_y {view_x * static_cast<float>(texture_height) /
+                  static_cast<float>(texture_width)};
+    float view_width {1.0f};
+    float view_height {view_width * static_cast<float>(texture_height) /
+                       static_cast<float>(texture_width)};
+    Scene scene {
+        .materials =
+            {Material {{0.75f, 0.75f, 0.75f},
+                       {6.0f, 6.0f, 6.0f},
+                       Material_type::diffuse},
+             Material {{0.75f, 0.25f, 0.25f}, {}, Material_type::dielectric},
+             Material {{0.25f, 0.25f, 0.75f}, {}, Material_type::dielectric},
+             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::specular},
+             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse}},
+        .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
+                    Circle {{0.5f, 0.3f}, 0.15f, 1},
+                    Circle {{0.8f, 0.2f}, 0.05f, 2}},
+        .lines = {Line {{0.1f, 0.2f}, {0.35f, 0.05f}, 3},
+                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
+        .arcs = {Arc {{0.6f, 0.6f},
+                      0.1f,
+                      0.0f,
+                      -2.0f * std::numbers::pi_v<float> / 3.0f,
+                      3}}};
+
+    const auto compute_program = create_compute_program("trace.comp");
+    SCOPE_EXIT([compute_program] { glDeleteProgram(compute_program); });
 
     const auto loc_sample_index =
-        glGetUniformLocation(compute_program_id, "sample_index");
+        glGetUniformLocation(compute_program, "sample_index");
     const auto loc_samples_per_frame =
-        glGetUniformLocation(compute_program_id, "samples_per_frame");
-    const auto loc_world_size =
-        glGetUniformLocation(compute_program_id, "world_size");
-    const auto loc_mouse = glGetUniformLocation(compute_program_id, "mouse");
+        glGetUniformLocation(compute_program, "samples_per_frame");
+    const auto loc_view_position =
+        glGetUniformLocation(compute_program, "view_position");
+    const auto loc_view_size =
+        glGetUniformLocation(compute_program, "view_size");
 
-    const auto post_program_id = create_compute_program("post.comp");
-    SCOPE_EXIT([post_program_id] { glDeleteProgram(post_program_id); });
+    const auto post_program = create_compute_program("post.comp");
+    SCOPE_EXIT([post_program] { glDeleteProgram(post_program); });
 
-    constexpr int texture_width {320};
-    constexpr int texture_height {240};
-    const auto accumulation_texture_id =
+    const auto accumulation_texture =
         create_accumulation_texture(texture_width, texture_height);
-    SCOPE_EXIT([&accumulation_texture_id]
-               { glDeleteTextures(1, &accumulation_texture_id); });
+    SCOPE_EXIT([&accumulation_texture]
+               { glDeleteTextures(1, &accumulation_texture); });
 
-    const auto target_texture_id =
+    const auto target_texture =
         create_target_texture(texture_width, texture_height);
-    SCOPE_EXIT([&target_texture_id]
-               { glDeleteTextures(1, &target_texture_id); });
+    SCOPE_EXIT([&target_texture] { glDeleteTextures(1, &target_texture); });
 
-    const auto fbo_id = create_framebuffer(target_texture_id);
-    SCOPE_EXIT([&fbo_id] { glDeleteFramebuffers(1, &fbo_id); });
+    const auto fbo = create_framebuffer(target_texture);
+    SCOPE_EXIT([&fbo] { glDeleteFramebuffers(1, &fbo); });
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-    GLuint query_id {};
-    glGenQueries(1, &query_id);
-    SCOPE_EXIT([&query_id] { glDeleteQueries(1, &query_id); });
+    GLuint query {};
+    glGenQueries(1, &query);
+    SCOPE_EXIT([&query] { glDeleteQueries(1, &query); });
 
-    constexpr float world_width {1.0f};
-    constexpr float world_height {world_width *
-                                  static_cast<float>(texture_height) /
-                                  static_cast<float>(texture_width)};
+    struct
+    {
+        GLuint materials;
+        GLuint circles;
+        GLuint lines;
+        GLuint arcs;
+    } ssbos {};
+    glGenBuffers(4, reinterpret_cast<GLuint *>(&ssbos));
+    SCOPE_EXIT([&ssbos]
+               { glDeleteBuffers(4, reinterpret_cast<GLuint *>(&ssbos)); });
+
+    const auto buffer_data =
+        []<typename T>(const std::vector<T> &data, GLuint ssbo, GLuint binding)
+    {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,
+                     static_cast<GLsizeiptr>(data.size() * sizeof(T)),
+                     data.data(),
+                     GL_DYNAMIC_READ);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo);
+    };
+    buffer_data(scene.materials, ssbos.materials, 1);
+    buffer_data(scene.circles, ssbos.circles, 2);
+    buffer_data(scene.lines, ssbos.lines, 3);
+    buffer_data(scene.arcs, ssbos.arcs, 4);
+
     unsigned int sample_index {0};
     unsigned int samples_per_frame {1};
 
@@ -585,54 +669,54 @@ void run()
                                                          framebuffer_width,
                                                          framebuffer_height);
 
-        double xpos {};
+        /*double xpos {};
         double ypos {};
         glfwGetCursorPos(window, &xpos, &ypos);
         // Normalized mouse coordinates
         const auto mouse_x = static_cast<float>(
             (xpos * static_cast<double>(x_scale) - x0) / (x1 - x0));
         const auto mouse_y = static_cast<float>(
-            (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));
+            (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));*/
 
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
         {
             sample_index = 0;
         }
 
-        if (static bool pressed {false};
-            glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !pressed)
+        if (static bool s_pressed {false};
+            glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
         {
-            pressed = true;
+            s_pressed = true;
             save_as_png("out.png", texture_width, texture_height);
         }
         else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_RELEASE)
         {
-            pressed = false;
+            s_pressed = false;
         }
 
-        glBeginQuery(GL_TIME_ELAPSED, query_id);
+        glBeginQuery(GL_TIME_ELAPSED, query);
 
         glViewport(0, 0, framebuffer_width, framebuffer_height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        glUseProgram(compute_program_id);
+        glUseProgram(compute_program);
         glUniform1ui(loc_sample_index, sample_index);
         glUniform1ui(loc_samples_per_frame, samples_per_frame);
-        glUniform2f(loc_world_size, world_width, world_height);
-        glUniform2f(loc_mouse, mouse_x, mouse_y);
-        constexpr unsigned int num_groups_x {
-            align_up(texture_width, 16) / 16,
+        glUniform2f(loc_view_position, view_x, view_y);
+        glUniform2f(loc_view_size, view_width, view_height);
+        unsigned int num_groups_x {
+            align_up(static_cast<unsigned int>(texture_width), 16) / 16,
         };
-        constexpr unsigned int num_groups_y {
-            align_up(texture_height, 16) / 16,
+        unsigned int num_groups_y {
+            align_up(static_cast<unsigned int>(texture_height), 16) / 16,
         };
         glDispatchCompute(num_groups_x, num_groups_y, 1);
         sample_index += samples_per_frame;
 
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-        glUseProgram(post_program_id);
+        glUseProgram(post_program);
         glDispatchCompute(num_groups_x, num_groups_y, 1);
 
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
@@ -670,7 +754,7 @@ void run()
         glfwSwapBuffers(window);
 
         GLint64 elapsed_ns {};
-        glGetQueryObjecti64v(query_id, GL_QUERY_RESULT, &elapsed_ns);
+        glGetQueryObjecti64v(query, GL_QUERY_RESULT, &elapsed_ns);
         const double elapsed {static_cast<double>(elapsed_ns) / 1e9};
         constexpr double target_compute_per_frame {0.014};
         const auto error = target_compute_per_frame - elapsed;

@@ -2,19 +2,44 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(rgba32f, binding = 0) uniform image2D accumulation_image;
-layout(rgba8, binding = 1) uniform image2D target_image;
+layout(rgba32f, binding = 0) uniform readonly restrict image2D accumulation_image;
+layout(rgba8, binding = 5) uniform writeonly restrict image2D target_image;
 
-// Tone mapping curve from Krzysztof Narkowicz
+// ACES tone mapping curve from Krzysztof Narkowicz
 // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
-vec3 tone_map(vec3 x)
+vec3 ACES_tone_map(vec3 color)
 {
     const float a = 2.51;
     const float b = 0.03;
     const float c = 2.43;
     const float d = 0.59;
     const float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
+}
+
+// Khronos PBR neutral tone mapper from https://modelviewer.dev/examples/tone-mapping
+// This should preserve well the hue of bright colors
+vec3 PBR_neutral_tone_map(vec3 color)
+{
+    const float start_compression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+
+    const float x = min(color.r, min(color.g, color.b));
+    const float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+
+    const float peak = max(color.r, max(color.g, color.b));
+    if (peak < start_compression)
+    {
+        return color;
+    }
+
+    const float d = 1.0 - start_compression;
+    const float new_peak = 1.0 - d * d / (peak + d - start_compression);
+    color *= new_peak / peak;
+
+    const float g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(color, new_peak * vec3(1.0, 1.0, 1.0), g);
 }
 
 void main()
@@ -26,7 +51,11 @@ void main()
     }
 
     vec4 color = imageLoad(accumulation_image, ivec2(gl_GlobalInvocationID.xy));
-    color.rgb = tone_map(color.rgb);
+#if 0
+    color.rgb = PBR_neutral_tone_map(color.rgb);
+#else
+    color.rgb = ACES_tone_map(color.rgb);
+#endif
     color.a = clamp(color.a, 0.0, 1.0);
     imageStore(target_image, ivec2(gl_GlobalInvocationID.xy), color);
 }

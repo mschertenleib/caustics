@@ -82,7 +82,6 @@ set(gcc_warnings
     -Wduplicated-cond
     -Wduplicated-branches
     -Wlogical-op
-    -Wuseless-cast
     -Wswitch-enum
 )
 if (CMAKE_CXX_COMPILER_ID MATCHES ".*Clang")
