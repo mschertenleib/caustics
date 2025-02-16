@@ -204,6 +204,15 @@ void glfw_error_callback(int error, const char *description)
     std::cerr << "GLFW error " << error << ": " << description << '\n';
 }
 
+double scroll_offset {}; // FIXME: this shouldn't be global, but this will be
+                         // fixed when we move everything to callbacks
+void glfw_scroll_callback([[maybe_unused]] GLFWwindow *window,
+                          [[maybe_unused]] double xoffset,
+                          double yoffset)
+{
+    scroll_offset = yoffset;
+}
+
 void load_gl_functions()
 {
 #define LOAD_GL_FUNCTION(type, name)                                           \
@@ -663,8 +672,11 @@ void run()
     float drag_source_view_x {};
     float drag_source_view_y {};
 
+    glfwSetScrollCallback(window, &glfw_scroll_callback);
+
     while (!glfwWindowShouldClose(window))
     {
+        scroll_offset = 0.0;
         glfwPollEvents();
 
         int framebuffer_width {};
@@ -676,6 +688,7 @@ void run()
                                                          framebuffer_width,
                                                          framebuffer_height);
 
+        // FIXME: all of this should be done in callbacks
         if (const auto mouse_state =
                 glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
             mouse_state == GLFW_PRESS)
@@ -710,6 +723,23 @@ void run()
         else if (mouse_state == GLFW_RELEASE)
         {
             dragging = false;
+        }
+
+        if (scroll_offset != 0.0)
+        {
+            // TODO: zoom around mouse cursor
+            constexpr float factor {1.5f};
+            if (scroll_offset > 0.0)
+            {
+                view_width /= factor;
+                view_height /= factor;
+            }
+            else
+            {
+                view_width *= factor;
+                view_height *= factor;
+            }
+            sample_index = 0;
         }
 
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
