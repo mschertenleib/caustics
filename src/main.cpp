@@ -656,6 +656,13 @@ void run()
     double last_time {glfwGetTime()};
     int num_frames {0};
 
+    bool s_pressed {false};
+    bool dragging {false};
+    double drag_source_mouse_x {};
+    double drag_source_mouse_y {};
+    float drag_source_view_x {};
+    float drag_source_view_y {};
+
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -669,22 +676,48 @@ void run()
                                                          framebuffer_width,
                                                          framebuffer_height);
 
-        /*double xpos {};
-        double ypos {};
-        glfwGetCursorPos(window, &xpos, &ypos);
-        // Normalized mouse coordinates
-        const auto mouse_x = static_cast<float>(
-            (xpos * static_cast<double>(x_scale) - x0) / (x1 - x0));
-        const auto mouse_y = static_cast<float>(
-            (ypos * static_cast<double>(y_scale) - y0) / (y1 - y0));*/
+        if (const auto mouse_state =
+                glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
+            mouse_state == GLFW_PRESS)
+        {
+            double xpos {};
+            double ypos {};
+            glfwGetCursorPos(window, &xpos, &ypos);
+
+            if (!dragging)
+            {
+                dragging = true;
+                drag_source_mouse_x = xpos;
+                drag_source_mouse_y = ypos;
+                drag_source_view_x = view_x;
+                drag_source_view_y = view_y;
+            }
+            else
+            {
+                // Drag vector
+                const auto drag_world_x =
+                    static_cast<float>(xpos - drag_source_mouse_x) * x_scale /
+                    static_cast<float>(x1 - x0) * view_width;
+                const auto drag_world_y =
+                    static_cast<float>(ypos - drag_source_mouse_y) * y_scale /
+                    static_cast<float>(y1 - y0) * view_height;
+
+                view_x = drag_source_view_x - drag_world_x;
+                view_y = drag_source_view_y - drag_world_y;
+                sample_index = 0;
+            }
+        }
+        else if (mouse_state == GLFW_RELEASE)
+        {
+            dragging = false;
+        }
 
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
         {
             sample_index = 0;
         }
 
-        if (static bool s_pressed {false};
-            glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
         {
             s_pressed = true;
             save_as_png("out.png", texture_width, texture_height);
