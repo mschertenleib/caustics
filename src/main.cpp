@@ -827,13 +827,11 @@ void run()
 
         const auto elapsed = static_cast<double>(end_time - start_time) / 1e9;
         constexpr double target_compute_per_frame {0.014};
-        const auto error = target_compute_per_frame - elapsed;
         const auto samples_per_frame_f =
-            static_cast<double>(samples_per_frame) + 100.0 * error;
-        samples_per_frame = static_cast<unsigned int>(
-            std::max(error > 0.0 ? std::ceil(samples_per_frame_f)
-                                 : std::floor(samples_per_frame_f),
-                     1.0));
+            static_cast<double>(samples_per_frame) * target_compute_per_frame /
+            elapsed;
+        samples_per_frame =
+            static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
     }
 }
 
