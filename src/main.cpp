@@ -2,6 +2,7 @@
 #include <stb_image_write.h>
 
 #define GLFW_INCLUDE_GLCOREARB
+#define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 
 #include <cassert>
@@ -71,10 +72,10 @@ namespace
     f(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);                            \
     f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
     f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
-    f(PFNGLBEGINQUERYPROC, glBeginQuery);                                      \
-    f(PFNGLENDQUERYPROC, glEndQuery);                                          \
-    f(PFNGLGETQUERYOBJECTI64VPROC, glGetQueryObjecti64v);                      \
+    f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
+    f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);                    \
     f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
+    f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
     f(PFNGLFINISHPROC, glFinish);
 
 // clang-format off
@@ -629,9 +630,12 @@ void run()
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-    GLuint query {};
-    glGenQueries(1, &query);
-    SCOPE_EXIT([&query] { glDeleteQueries(1, &query); });
+    GLuint query_start {};
+    GLuint query_end {};
+    glGenQueries(1, &query_start);
+    SCOPE_EXIT([&query_start] { glDeleteQueries(1, &query_start); });
+    glGenQueries(1, &query_end);
+    SCOPE_EXIT([&query_end] { glDeleteQueries(1, &query_end); });
 
     struct
     {
@@ -757,7 +761,7 @@ void run()
             s_pressed = false;
         }
 
-        glBeginQuery(GL_TIME_ELAPSED, query);
+        glQueryCounter(query_start, GL_TIMESTAMP);
 
         glViewport(0, 0, framebuffer_width, framebuffer_height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -812,13 +816,16 @@ void run()
             last_time = current_time;
         }
 
-        glEndQuery(GL_TIME_ELAPSED);
+        glQueryCounter(query_end, GL_TIMESTAMP);
 
         glfwSwapBuffers(window);
 
-        GLint64 elapsed_ns {};
-        glGetQueryObjecti64v(query, GL_QUERY_RESULT, &elapsed_ns);
-        const double elapsed {static_cast<double>(elapsed_ns) / 1e9};
+        GLuint64 start_time {};
+        GLuint64 end_time {};
+        glGetQueryObjectui64v(query_start, GL_QUERY_RESULT, &start_time);
+        glGetQueryObjectui64v(query_end, GL_QUERY_RESULT, &end_time);
+
+        const auto elapsed = static_cast<double>(end_time - start_time) / 1e9;
         constexpr double target_compute_per_frame {0.014};
         const auto error = target_compute_per_frame - elapsed;
         const auto samples_per_frame_f =
