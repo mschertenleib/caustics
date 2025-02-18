@@ -598,6 +598,8 @@ void run()
     float view_width {1.0f};
     float view_height {view_width * static_cast<float>(texture_height) /
                        static_cast<float>(texture_width)};
+
+#if 0
     Scene scene {
         .materials =
             {Material {{0.75f, 0.75f, 0.75f},
@@ -617,6 +619,14 @@ void run()
                       0.0f,
                       -2.0f * std::numbers::pi_v<float> / 3.0f,
                       3}}};
+#else
+    Scene scene {
+        .materials = {Material {
+            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
+        .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
+        .lines = {},
+        .arcs = {}};
+#endif
 
     const auto compute_program = create_compute_program("trace.comp");
     SCOPE_EXIT([compute_program] { glDeleteProgram(compute_program); });
@@ -680,6 +690,7 @@ void run()
     buffer_data(scene.lines, ssbos.lines, 3);
     buffer_data(scene.arcs, ssbos.arcs, 4);
 
+    constexpr unsigned int max_samples {500'000};
     unsigned int sample_index {0};
     unsigned int samples_per_frame {1};
 
@@ -787,26 +798,31 @@ void run()
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        glUseProgram(compute_program);
-        glUniform1ui(loc_sample_index, sample_index);
-        glUniform1ui(loc_samples_per_frame, samples_per_frame);
-        glUniform2f(loc_view_position, view_x, view_y);
-        glUniform2f(loc_view_size, view_width, view_height);
-        unsigned int num_groups_x {
-            align_up(static_cast<unsigned int>(texture_width), 16) / 16,
-        };
-        unsigned int num_groups_y {
-            align_up(static_cast<unsigned int>(texture_height), 16) / 16,
-        };
-        glDispatchCompute(num_groups_x, num_groups_y, 1);
-        sample_index += samples_per_frame;
+        if (sample_index < max_samples)
+        {
+            const auto samples_this_frame =
+                std::min(samples_per_frame, max_samples - sample_index);
+            glUseProgram(compute_program);
+            glUniform1ui(loc_sample_index, sample_index);
+            glUniform1ui(loc_samples_per_frame, samples_this_frame);
+            glUniform2f(loc_view_position, view_x, view_y);
+            glUniform2f(loc_view_size, view_width, view_height);
+            unsigned int num_groups_x {
+                align_up(static_cast<unsigned int>(texture_width), 16) / 16,
+            };
+            unsigned int num_groups_y {
+                align_up(static_cast<unsigned int>(texture_height), 16) / 16,
+            };
+            glDispatchCompute(num_groups_x, num_groups_y, 1);
+            sample_index += samples_this_frame;
 
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-        glUseProgram(post_program);
-        glDispatchCompute(num_groups_x, num_groups_y, 1);
+            glUseProgram(post_program);
+            glDispatchCompute(num_groups_x, num_groups_y, 1);
 
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        }
 
         // NOTE: we switch y0 and y1 to have (0, 0) in the
         // top left corner
@@ -844,17 +860,17 @@ void run()
         glfwSwapBuffers(window);
 
         // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
-        // Intel with Mesa drivers return non-sensical numbers, rendering them
+        // Intel with Mesa drivers return non-sense numbers, rendering them
         // useless. For this reason, we unfortunately can not rely on GPU timing
         // at all. We could technically have a workaround for this specific
         // platform, but that also assumes that GL_RENDERER will always return a
-        // string correctly identifying the driver (what happens on WebGL?)
-        // Also, inserting a glFinish() because the frame presentation cuts
+        // string correctly identifying the driver (what happens on WebGL?).
+        // Also, inserting a glFinish() before the frame presentation cuts
         // performance by ~17% on an Intel iGPU... Is there something smart we
         // could do here without full CPU-GPU synchronization on each frame?
         // Else we might have to go with disabling V-Sync, but that won't work
         // on WebGL probably.
-        if (auto_workload)
+        if (auto_workload && sample_index < max_samples)
         {
             GLuint64 start_time {};
             GLuint64 end_time {};
