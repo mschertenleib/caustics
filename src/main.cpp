@@ -76,7 +76,8 @@ namespace
     f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);                    \
     f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
-    f(PFNGLFINISHPROC, glFinish);
+    f(PFNGLFINISHPROC, glFinish);                                              \
+    f(PFNGLGETSTRINGPROC, glGetString);
 
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
@@ -573,6 +574,22 @@ void run()
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     glDebugMessageCallback(&gl_debug_callback, nullptr);
 
+    const std::string renderer(
+        reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
+    std::cout << "Using renderer \"" << renderer << "\": ";
+    bool auto_workload {};
+    // FIXME: this is just a hack
+    if (renderer.find("Mesa") == std::string::npos)
+    {
+        std::cout << "enabling adaptive workload\n";
+        auto_workload = true;
+    }
+    else
+    {
+        std::cout << "disabling adaptive workload\n";
+        auto_workload = false;
+    }
+
     int texture_width {320};
     int texture_height {240};
     float view_x {0.5f};
@@ -761,7 +778,10 @@ void run()
             s_pressed = false;
         }
 
-        glQueryCounter(query_start, GL_TIMESTAMP);
+        if (auto_workload)
+        {
+            glQueryCounter(query_start, GL_TIMESTAMP);
+        }
 
         glViewport(0, 0, framebuffer_width, framebuffer_height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -816,22 +836,39 @@ void run()
             last_time = current_time;
         }
 
-        glQueryCounter(query_end, GL_TIMESTAMP);
+        if (auto_workload)
+        {
+            glQueryCounter(query_end, GL_TIMESTAMP);
+        }
 
         glfwSwapBuffers(window);
 
-        GLuint64 start_time {};
-        GLuint64 end_time {};
-        glGetQueryObjectui64v(query_start, GL_QUERY_RESULT, &start_time);
-        glGetQueryObjectui64v(query_end, GL_QUERY_RESULT, &end_time);
-
-        const auto elapsed = static_cast<double>(end_time - start_time) / 1e9;
-        constexpr double target_compute_per_frame {0.014};
-        const auto samples_per_frame_f =
-            static_cast<double>(samples_per_frame) * target_compute_per_frame /
-            elapsed;
-        samples_per_frame =
-            static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
+        // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
+        // Intel with Mesa drivers return non-sensical numbers, rendering them
+        // useless. For this reason, we unfortunately can not rely on GPU timing
+        // at all. We could technically have a workaround for this specific
+        // platform, but that also assumes that GL_RENDERER will always return a
+        // string correctly identifying the driver (what happens on WebGL?)
+        // Also, inserting a glFinish() because the frame presentation cuts
+        // performance by ~17% on an Intel iGPU... Is there something smart we
+        // could do here without full CPU-GPU synchronization on each frame?
+        // Else we might have to go with disabling V-Sync, but that won't work
+        // on WebGL probably.
+        if (auto_workload)
+        {
+            GLuint64 start_time {};
+            GLuint64 end_time {};
+            glGetQueryObjectui64v(query_start, GL_QUERY_RESULT, &start_time);
+            glGetQueryObjectui64v(query_end, GL_QUERY_RESULT, &end_time);
+            const auto elapsed =
+                static_cast<double>(end_time - start_time) / 1e9;
+            constexpr double target_compute_per_frame {0.014};
+            const auto samples_per_frame_f =
+                static_cast<double>(samples_per_frame) *
+                target_compute_per_frame / elapsed;
+            samples_per_frame =
+                static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
+        }
     }
 }
 
