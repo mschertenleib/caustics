@@ -281,7 +281,17 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         }
         accumulated_reflectance *= color;
 
-        const vec2 hit_pos = origin + t * direction;
+        // FIXME: if possible, the hit position should
+        // be computed based on the local object space (like barycentrics for
+        // triangles), or at least re-projected to the surface of the primitive.
+        vec2 hit_pos = origin + t * direction;
+        if (geometry_type == GEOMETRY_CIRCLE)
+        {
+            // For circles, re-project onto the surface
+            const Circle circle = circles[geometry_index];
+            hit_pos = circle.center + normalize(hit_pos - circle.center) * circle.radius;
+        }
+
         vec2 object_normal;
         switch (geometry_type)
         {
