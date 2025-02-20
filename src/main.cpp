@@ -77,6 +77,7 @@ namespace
     f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
     f(PFNGLFINISHPROC, glFinish);                                              \
+    f(PFNGLFLUSHPROC, glFlush);                                                \
     f(PFNGLGETSTRINGPROC, glGetString);
 
 // clang-format off
@@ -599,7 +600,7 @@ void run()
     float view_height {view_width * static_cast<float>(texture_height) /
                        static_cast<float>(texture_width)};
 
-#if 0
+#if 1
     Scene scene {
         .materials =
             {Material {{0.75f, 0.75f, 0.75f},
@@ -690,7 +691,7 @@ void run()
     buffer_data(scene.lines, ssbos.lines, 3);
     buffer_data(scene.arcs, ssbos.arcs, 4);
 
-    constexpr unsigned int max_samples {500'000};
+    constexpr unsigned int max_samples {200'000};
     unsigned int sample_index {0};
     unsigned int samples_per_frame {1};
 
@@ -759,17 +760,37 @@ void run()
 
         if (scroll_offset != 0.0)
         {
-            // TODO: zoom around mouse cursor
-            constexpr float factor {1.5f};
+            constexpr float zoom_factor {1.5f};
+
+            double xpos {};
+            double ypos {};
+            glfwGetCursorPos(window, &xpos, &ypos);
+            const auto mouse_world_x =
+                view_x +
+                ((static_cast<float>(xpos) * x_scale - static_cast<float>(x0)) /
+                     static_cast<float>(x1 - x0) -
+                 0.5f) *
+                    view_width;
+            const auto mouse_world_y =
+                view_y +
+                ((static_cast<float>(ypos) * y_scale - static_cast<float>(y0)) /
+                     static_cast<float>(y1 - y0) -
+                 0.5f) *
+                    view_height;
+
             if (scroll_offset > 0.0)
             {
-                view_width /= factor;
-                view_height /= factor;
+                view_x += (mouse_world_x - view_x) * (zoom_factor - 1.0f);
+                view_y += (mouse_world_y - view_y) * (zoom_factor - 1.0f);
+                view_width /= zoom_factor;
+                view_height /= zoom_factor;
             }
             else
             {
-                view_width *= factor;
-                view_height *= factor;
+                view_x -= (mouse_world_x - view_x) * (zoom_factor - 1.0f);
+                view_y -= (mouse_world_y - view_y) * (zoom_factor - 1.0f);
+                view_width *= zoom_factor;
+                view_height *= zoom_factor;
             }
             sample_index = 0;
         }
@@ -861,15 +882,10 @@ void run()
 
         // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
         // Intel with Mesa drivers return non-sense numbers, rendering them
-        // useless. For this reason, we unfortunately can not rely on GPU timing
+        // useless. For this reason, we unfortunately cannot rely on GPU timing
         // at all. We could technically have a workaround for this specific
         // platform, but that also assumes that GL_RENDERER will always return a
         // string correctly identifying the driver (what happens on WebGL?).
-        // Also, inserting a glFinish() before the frame presentation cuts
-        // performance by ~17% on an Intel iGPU... Is there something smart we
-        // could do here without full CPU-GPU synchronization on each frame?
-        // Else we might have to go with disabling V-Sync, but that won't work
-        // on WebGL probably.
         if (auto_workload && sample_index < max_samples)
         {
             GLuint64 start_time {};
