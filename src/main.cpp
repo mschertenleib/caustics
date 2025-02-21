@@ -584,6 +584,10 @@ void run()
     {
         std::cout << "disabling adaptive workload\n";
         auto_workload = false;
+        // FIXME: this is just to get some decent performance, but we should
+        // really find a way to activate V-Sync even when timer queries do not
+        // work.
+        glfwSwapInterval(0);
     }
     else
     {
