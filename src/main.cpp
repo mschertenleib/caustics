@@ -577,18 +577,18 @@ void run()
 
     const std::string renderer(
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
-    std::cout << "Using renderer \"" << renderer << "\": ";
+    std::cout << "Renderer: \"" << renderer << "\", ";
     bool auto_workload {};
-    // FIXME: this is just a hack
-    if (renderer.find("Mesa") == std::string::npos)
-    {
-        std::cout << "enabling adaptive workload\n";
-        auto_workload = true;
-    }
-    else
+    if (renderer.find("Mesa") != std::string::npos &&
+        renderer.find("Intel") != std::string::npos)
     {
         std::cout << "disabling adaptive workload\n";
         auto_workload = false;
+    }
+    else
+    {
+        std::cout << "enabling adaptive workload\n";
+        auto_workload = true;
     }
 
     int texture_width {320};
