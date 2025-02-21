@@ -227,11 +227,16 @@ vec2 offset_position_along_normal(vec2 position, vec2 normal)
 
 vec2 reflect_diffuse(vec2 normal, inout uint rng_state)
 {
-    // Random point on a unit circle centered on the normal
-    // FIXME: this distribution is probably wrong in 2D !
-    const float theta = 2.0 * PI * random(rng_state);
-    const vec2 direction = normal + vec2(cos(theta), sin(theta));
-    return normalize(direction);
+#if 0 // Uniform
+    const float angle = 2.0 * PI * random(rng_state);
+    return normalize(normal + vec2(cos(angle), sin(angle)));
+#else // Cosine weighted
+    const vec2 tangent = vec2(-normal.y, normal.x);
+    const float u = random(rng_state);
+    const float sin_theta = 2.0 * u - 1.0;
+    const float cos_theta = sqrt(1.0 - sin_theta * sin_theta);
+    return cos_theta * normal + sin_theta * tangent;
+#endif
 }
 
 vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
