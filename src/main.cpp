@@ -166,7 +166,7 @@ enum struct Material_type
 
 struct Material
 {
-    alignas(16) float albedo[3];
+    alignas(16) float color[3];
     alignas(16) float emissivity[3];
     alignas(4) Material_type type;
 };
@@ -613,7 +613,8 @@ void run()
              Material {{0.75f, 0.25f, 0.25f}, {}, Material_type::dielectric},
              Material {{0.25f, 0.25f, 0.75f}, {}, Material_type::dielectric},
              Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::specular},
-             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse}},
+             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
+             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::dielectric}},
         .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
                     Circle {{0.5f, 0.3f}, 0.15f, 1},
                     Circle {{0.8f, 0.2f}, 0.05f, 2}},

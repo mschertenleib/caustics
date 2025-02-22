@@ -7,7 +7,7 @@ layout(rgba32f, binding = 0) uniform restrict image2D accumulation_image;
 
 struct Material
 {
-    vec3 albedo;
+    vec3 color;
     vec3 emissivity;
     int type;
 };
@@ -115,10 +115,11 @@ bool intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius, in
     return false;
 }
 
-bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t)
+bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t, out float u)
 {
     const vec2 ab = b - a;
     const float determinant = direction.x * ab.y - direction.y * ab.x;
+    // TODO: optimize this parameter to reduce missed hits as much as possible
     if (abs(determinant) < 1e-6) // Parallel
     {
         return false;
@@ -126,11 +127,12 @@ bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t)
 
     const mat2 mat_inv = 1.0 / determinant * mat2(-direction.y, -ab.y, direction.x, ab.x);
     const vec2 result = mat_inv * (origin - a);
-    const float u = result.x;
+    const float intersection_u = result.x;
     const float intersection_t = result.y;
-    if (intersection_t > 0.0 && intersection_t < t && u >= 0.0 && u <= 1.0)
+    if (intersection_t > 0.0 && intersection_t < t && intersection_u >= 0.0 && intersection_u <= 1.0)
     {
         t = intersection_t;
+        u = intersection_u;
         return true;
     }
 
@@ -177,7 +179,7 @@ bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, float
     return false;
 }
 
-bool intersect(vec2 origin, vec2 direction, out float t, out uint geometry_type, out uint geometry_index)
+bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint geometry_type, out uint geometry_index)
 {
     t = 1e6;
     geometry_type = GEOMETRY_NONE;
@@ -193,7 +195,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out uint geometry_type,
     }
     for (uint i = 0; i < lines.length(); ++i)
     {
-        if (intersect_line(origin, direction, lines[i].a, lines[i].b, t))
+        if (intersect_line(origin, direction, lines[i].a, lines[i].b, t, u))
         {
             geometry_type = GEOMETRY_LINE;
             geometry_index = i;
@@ -233,34 +235,37 @@ vec2 offset_position_along_normal(vec2 position, vec2 normal)
         abs(position.y) < origin ? position.y + float_scale * normal.y : p_i.y);
 }
 
-Hit get_hit(vec2 origin, vec2 direction, float t, uint geometry_type, uint geometry_index)
+Hit get_hit(vec2 origin, vec2 direction, float t, float u, uint geometry_type, uint geometry_index)
 {
     Hit hit;
-    hit.position = origin * t * direction;
 
     switch(geometry_type)
     {
     case GEOMETRY_CIRCLE:
     {
         const Circle circle = circles[geometry_index];
+        hit.position = origin + t * direction;
         hit.normal = normalize(hit.position - circle.center);
+        // Re-project the hit position onto the circle
         hit.position = circle.center + hit.normal * circle.radius;
         hit.material_id = circle.material_id;
         break;
     }
     case GEOMETRY_LINE:
     {
-        // FIXME: more accurate hit position and correctly oriented normal
         const Line line = lines[geometry_index];
+        hit.position = line.a + u * (line.b - line.a);
         const vec2 line_dir = normalize(line.b - line.a);
-        hit.normal = vec2(-line_dir.y, line_dir.x);
+        hit.normal = vec2(line_dir.y, -line_dir.x);
         hit.material_id = line.material_id;
         break;
     }
     case GEOMETRY_ARC:
     {
         const Arc arc = arcs[geometry_index];
+        hit.position = origin + t * direction;
         hit.normal = normalize(hit.position - arc.center);
+        // Re-project the hit position onto the arc
         hit.position = arc.center + hit.normal * arc.radius;
         hit.material_id = arc.material_id;
         break;
@@ -289,102 +294,62 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
     vec3 accumulated_color = vec3(0.0);
     vec3 accumulated_reflectance = vec3(1.0);
 
-    for (uint depth = 0; depth < 32; ++depth)
+    const uint max_depth = 32;
+    for (uint depth = 0; depth < max_depth; ++depth)
     {
         float t;
+        float u;
         uint geometry_type;
         uint geometry_index;
-        const bool hit = intersect(origin, direction, t, geometry_type, geometry_index);
-        // FIXME: this is just a quick fix
-        if (!hit)
+        const bool is_hit = intersect(origin, direction, t, u, geometry_type, geometry_index);
+
+        if (!is_hit)
         {
             return accumulated_color;
         }
 
-        // FIXME: this is undefined if there is no hit !!
-        uint material_id;
-        switch(geometry_type)
-        {
-        case GEOMETRY_CIRCLE: material_id = circles[geometry_index].material_id; break;
-        case GEOMETRY_LINE: material_id = lines[geometry_index].material_id; break;
-        case GEOMETRY_ARC: material_id = arcs[geometry_index].material_id; break;
-        }
-        const Material material = materials[material_id];
+        const Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
+        const Material material = materials[hit.material_id];
+        
+        accumulated_color += accumulated_reflectance * material.emissivity;
 
-        const vec3 emissivity = hit ? material.emissivity : vec3(0.0);
-
-        accumulated_color += accumulated_reflectance * emissivity;
-        if (!hit)
+        vec3 color = material.color;
+        const float max_color = max(color.r, max(color.g, color.b));
+        // Russian Roulette ray termination
+        if (random(rng_state) < max_color && depth < max_depth - 1)
         {
-            return accumulated_color;
-        }
-
-        vec3 color = material.albedo;
-        const float p = max(color.r, max(color.g, color.b));
-        if (random(rng_state) < p)
-        {
-            color /= p;
+            color /= max_color;
         }
         else
         {
             return accumulated_color;
         }
+
         accumulated_reflectance *= color;
 
-        // FIXME: if possible, the hit position should
-        // be computed based on the local object space (like barycentrics for
-        // triangles), or at least re-projected to the surface of the primitive.
-        vec2 hit_pos = origin + t * direction;
-        if (geometry_type == GEOMETRY_CIRCLE)
-        {
-            // For circles, re-project onto the surface
-            const Circle circle = circles[geometry_index];
-            hit_pos = circle.center + normalize(hit_pos - circle.center) * circle.radius;
-        }
-
-        vec2 object_normal;
-        switch (geometry_type)
-        {
-        case GEOMETRY_CIRCLE:
-        {
-            object_normal = normalize(hit_pos - circles[geometry_index].center);
-            break;
-        }
-        case GEOMETRY_LINE:
-        {
-            const vec2 line_dir = normalize(lines[geometry_index].b - lines[geometry_index].a);
-            object_normal = vec2(-line_dir.y, line_dir.x);
-            break;
-        }
-        case GEOMETRY_ARC:
-        {
-            object_normal = normalize(hit_pos - arcs[geometry_index].center);
-            break;
-        }
-        }
-
-        const bool into = dot(direction, object_normal) < 0.0;
-        const vec2 normal = into ? object_normal : -object_normal;
+        // hit.normal: object normal, defining "inside" and "outside" for relevant
+        //             primitives (circles and dielectric primitives)
+        // normal:     front-facing normal as seen by the incoming ray
+        const bool into = dot(direction, hit.normal) < 0.0;
+        const vec2 normal = into ? hit.normal : -hit.normal;
         
         switch (material.type)
         {
         case DIFFUSE:
         {
-            origin = offset_position_along_normal(hit_pos, normal);
+            origin = offset_position_along_normal(hit.position, normal);
             direction = reflect_diffuse(normal, rng_state);
             break;
         }
         case SPECULAR:
         {
-            origin = offset_position_along_normal(hit_pos, normal);
+            origin = offset_position_along_normal(hit.position, normal);
             direction = reflect(direction, normal);
             break;
         }
         case DIELECTRIC:
         {
-            // FIXME: this is broken for non-circles (because only circles have a defined
-            // "inside" and "outside" for now)
-            const vec2 reflected_dir = direction - 2.0 * object_normal * dot(object_normal, direction);
+            const vec2 reflected_dir = reflect(direction, hit.normal);
 
             const float n_air = 1.0;
             const float n_glass = 1.5;
@@ -394,18 +359,18 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
             // Total internal reflection
             if (cos2t < 0.0)
             {
-                origin = offset_position_along_normal(hit_pos, normal);
+                origin = offset_position_along_normal(hit.position, normal);
                 direction = reflected_dir;
                 continue;
             }
 
-            const vec2 transmitted_dir = normalize(direction * n_ratio - object_normal *
+            const vec2 transmitted_dir = normalize(direction * n_ratio - hit.normal *
                 ((into ? 1.0 : -1.0) * (dir_dot_normal * n_ratio + sqrt(cos2t))));
 
             const float a = n_glass - n_air;
             const float b = n_glass + n_air;
             const float R0 = a * a / (b * b);
-            const float c = 1.0 - (into ? -dir_dot_normal : dot(transmitted_dir, object_normal));
+            const float c = 1.0 - (into ? -dir_dot_normal : dot(transmitted_dir, hit.normal));
             const float Re = R0 + (1.0 - R0) * c * c * c * c * c;
             const float Tr = 1.0 - Re;
             const float P = 0.25 + 0.5 * Re;
@@ -414,13 +379,13 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
             if (random(rng_state) < P)
             {
                 accumulated_reflectance *= RP;
-                origin = offset_position_along_normal(hit_pos, normal);
+                origin = offset_position_along_normal(hit.position, normal);
                 direction = reflected_dir;
             }
             else
             {
                 accumulated_reflectance *= TP;
-                origin = offset_position_along_normal(hit_pos, -normal);
+                origin = offset_position_along_normal(hit.position, -normal);
                 direction = transmitted_dir;
             }
             break;
@@ -428,6 +393,8 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         }
     }
 
+    // NOTE: this is unreachable. If we reach the last iteration,
+    // we will return before computing a new ray.
     return accumulated_color;
 }
 
