@@ -35,6 +35,14 @@ struct Arc
     uint material_id;
 };
 
+struct Hit
+{
+    vec2 position;
+    vec2 normal;
+    uint material_id;
+};
+
+
 layout(std140, binding = 1) restrict readonly buffer Materials { Material materials[]; };
 layout(std140, binding = 2) restrict readonly buffer Circles { Circle circles[]; };
 layout(std140, binding = 3) restrict readonly buffer Lines { Line lines[]; };
@@ -223,6 +231,43 @@ vec2 offset_position_along_normal(vec2 position, vec2 normal)
     return vec2(
         abs(position.x) < origin ? position.x + float_scale * normal.x : p_i.x,
         abs(position.y) < origin ? position.y + float_scale * normal.y : p_i.y);
+}
+
+Hit get_hit(vec2 origin, vec2 direction, float t, uint geometry_type, uint geometry_index)
+{
+    Hit hit;
+    hit.position = origin * t * direction;
+
+    switch(geometry_type)
+    {
+    case GEOMETRY_CIRCLE:
+    {
+        const Circle circle = circles[geometry_index];
+        hit.normal = normalize(hit.position - circle.center);
+        hit.position = circle.center + hit.normal * circle.radius;
+        hit.material_id = circle.material_id;
+        break;
+    }
+    case GEOMETRY_LINE:
+    {
+        // FIXME: more accurate hit position and correctly oriented normal
+        const Line line = lines[geometry_index];
+        const vec2 line_dir = normalize(line.b - line.a);
+        hit.normal = vec2(-line_dir.y, line_dir.x);
+        hit.material_id = line.material_id;
+        break;
+    }
+    case GEOMETRY_ARC:
+    {
+        const Arc arc = arcs[geometry_index];
+        hit.normal = normalize(hit.position - arc.center);
+        hit.position = arc.center + hit.normal * arc.radius;
+        hit.material_id = arc.material_id;
+        break;
+    }
+    }
+
+    return hit;
 }
 
 vec2 reflect_diffuse(vec2 normal, inout uint rng_state)
