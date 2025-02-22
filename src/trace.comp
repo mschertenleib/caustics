@@ -119,7 +119,6 @@ bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t, 
 {
     const vec2 ab = b - a;
     const float determinant = direction.x * ab.y - direction.y * ab.x;
-    // TODO: optimize this parameter to reduce missed hits as much as possible
     if (abs(determinant) < 1e-6) // Parallel
     {
         return false;
@@ -295,7 +294,7 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
     vec3 accumulated_reflectance = vec3(1.0);
 
     const uint max_depth = 32;
-    for (uint depth = 0; depth < max_depth; ++depth)
+    for (uint depth = 0; depth <= max_depth; ++depth)
     {
         float t;
         float u;
@@ -316,7 +315,7 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         vec3 color = material.color;
         const float max_color = max(color.r, max(color.g, color.b));
         // Russian Roulette ray termination
-        if (random(rng_state) < max_color && depth < max_depth - 1)
+        if (random(rng_state) < max_color && depth < max_depth)
         {
             color /= max_color;
         }
@@ -379,6 +378,8 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
             if (random(rng_state) < P)
             {
                 accumulated_reflectance *= RP;
+                // FIXME: I feel like we should be using hit.normal here.
+                // We should really double check the entire refraction code.
                 origin = offset_position_along_normal(hit.position, normal);
                 direction = reflected_dir;
             }
