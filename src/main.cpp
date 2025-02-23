@@ -87,69 +87,6 @@ namespace
 
 ENUMERATE_GL_FUNCTIONS(DECLARE_GL_FUNCTION)
 
-template <typename F>
-class Scope_exit
-{
-public:
-    [[nodiscard]] explicit Scope_exit(F &&f) noexcept : m_f(std::move(f))
-    {
-    }
-
-    [[nodiscard]] explicit Scope_exit(F &f) noexcept : m_f(f)
-    {
-    }
-
-    ~Scope_exit() noexcept
-    {
-        m_f();
-    }
-
-    Scope_exit(const Scope_exit &) = delete;
-    Scope_exit(Scope_exit &&) = delete;
-    Scope_exit &operator=(const Scope_exit &) = delete;
-    Scope_exit &operator=(Scope_exit &&) = delete;
-
-private:
-    F m_f;
-};
-
-template <typename F>
-class Scope_fail
-{
-public:
-    [[nodiscard]] explicit Scope_fail(F &&f) noexcept
-        : m_exception_count(std::uncaught_exceptions()), m_f(std::move(f))
-    {
-    }
-
-    [[nodiscard]] explicit Scope_fail(F &f) noexcept
-        : m_exception_count(std::uncaught_exceptions()), m_f(f)
-    {
-    }
-
-    ~Scope_fail() noexcept
-    {
-        if (std::uncaught_exceptions() > m_exception_count)
-        {
-            m_f();
-        }
-    }
-
-    Scope_fail(const Scope_fail &) = delete;
-    Scope_fail(Scope_fail &&) = delete;
-    Scope_fail &operator=(const Scope_fail &) = delete;
-    Scope_fail &operator=(Scope_fail &&) = delete;
-
-private:
-    int m_exception_count;
-    F m_f;
-};
-
-#define CONCATENATE_IMPL(s1, s2) s1##s2
-#define CONCATENATE(s1, s2)      CONCATENATE_IMPL(s1, s2)
-#define SCOPE_EXIT(f)            const Scope_exit CONCATENATE(scope_exit_, __LINE__)(f)
-#define SCOPE_FAIL(f)            const Scope_fail CONCATENATE(scope_fail_, __LINE__)(f)
-
 template <typename Destroy>
 class GL_object
 {
@@ -165,8 +102,10 @@ public:
     }
 
     constexpr GL_object(GL_object &&rhs) noexcept
+        : m_object {std::move(rhs.m_object)},
+          m_destroy {std::move(rhs.m_destroy)}
     {
-        swap(rhs);
+        rhs.m_object = 0;
     }
 
     constexpr GL_object &operator=(GL_object &&rhs) noexcept
@@ -194,13 +133,14 @@ public:
 
     constexpr void swap(GL_object &rhs) noexcept
     {
-        std::swap(m_object, rhs.m_object);
-        std::swap(m_destroy, rhs.m_destroy);
+        using std::swap;
+        swap(m_object, rhs.m_object);
+        swap(m_destroy, rhs.m_destroy);
     }
 
 private:
-    GLuint m_object {0};
-    Destroy m_destroy {};
+    GLuint m_object;
+    Destroy m_destroy;
 };
 
 [[nodiscard]] auto create_object(GLuint (*create)(), void (*destroy)(GLuint))
@@ -384,22 +324,21 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     }
 }
 
-[[nodiscard]] GLuint create_shader(GLenum type, const char *code)
+[[nodiscard]] auto create_shader(GLenum type, const char *code)
 {
-    const auto shader = glCreateShader(type);
-    SCOPE_FAIL([shader] { glDeleteShader(shader); });
+    auto shader = create_object(glCreateShader, type, glDeleteShader);
 
-    glShaderSource(shader, 1, &code, nullptr);
-    glCompileShader(shader);
+    glShaderSource(shader.get(), 1, &code, nullptr);
+    glCompileShader(shader.get());
 
     int success {};
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    glGetShaderiv(shader.get(), GL_COMPILE_STATUS, &success);
     if (!success)
     {
         int buf_length {};
-        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &buf_length);
+        glGetShaderiv(shader.get(), GL_INFO_LOG_LENGTH, &buf_length);
         std::string message(static_cast<std::size_t>(buf_length), '\0');
-        glGetShaderInfoLog(shader, buf_length, nullptr, message.data());
+        glGetShaderInfoLog(shader.get(), buf_length, nullptr, message.data());
         std::ostringstream oss;
         oss << "Shader compilation failed:\n" << message << '\n';
         throw std::runtime_error(oss.str());
@@ -408,22 +347,21 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return shader;
 }
 
-[[nodiscard]] GLuint create_program(auto &&...shaders)
+[[nodiscard]] auto create_program(auto &&...shaders)
 {
-    const auto program = glCreateProgram();
-    SCOPE_FAIL([program] { glDeleteProgram(program); });
+    auto program = create_object(glCreateProgram, glDeleteProgram);
 
-    (glAttachShader(program, shaders), ...);
-    glLinkProgram(program);
+    (glAttachShader(program.get(), shaders), ...);
+    glLinkProgram(program.get());
 
     int success {};
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
+    glGetProgramiv(program.get(), GL_LINK_STATUS, &success);
     if (!success)
     {
         int buf_length {};
-        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &buf_length);
+        glGetProgramiv(program.get(), GL_INFO_LOG_LENGTH, &buf_length);
         std::string message(static_cast<std::size_t>(buf_length), '\0');
-        glGetProgramInfoLog(program, buf_length, nullptr, message.data());
+        glGetProgramInfoLog(program.get(), buf_length, nullptr, message.data());
         std::ostringstream oss;
         oss << "Program linking failed:\n" << message << '\n';
         throw std::runtime_error(oss.str());
@@ -432,19 +370,16 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return program;
 }
 
-[[nodiscard]] GLuint create_compute_program(const char *file_name)
+[[nodiscard]] auto create_compute_program(const char *file_name)
 {
     const auto shader_code = read_file(file_name);
     const auto c_shader_code = shader_code.c_str();
     const auto shader = create_shader(GL_COMPUTE_SHADER, c_shader_code);
-    SCOPE_EXIT([shader] { glDeleteShader(shader); });
 
-    const auto program = create_program(shader);
-
-    return program;
+    return create_program(shader.get());
 }
 
-[[maybe_unused]] [[nodiscard]] GLuint create_vert_frag_program()
+[[maybe_unused]] [[nodiscard]] auto create_vert_frag_program()
 {
     constexpr auto vertex_shader_code = R"(#version 430
 layout (location = 0) in vec2 vertex_position;
@@ -462,23 +397,17 @@ void main()
 
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code);
-    SCOPE_EXIT([vertex_shader] { glDeleteShader(vertex_shader); });
-
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER, fragment_shader_code);
-    SCOPE_EXIT([fragment_shader] { glDeleteShader(fragment_shader); });
 
-    const auto program = create_program(vertex_shader, fragment_shader);
-
-    return program;
+    return create_program(vertex_shader.get(), fragment_shader.get());
 }
 
-[[nodiscard]] GLuint create_accumulation_texture(GLsizei width, GLsizei height)
+[[nodiscard]] auto create_accumulation_texture(GLsizei width, GLsizei height)
 {
-    GLuint texture {};
-    glGenTextures(1, &texture);
+    auto texture = create_object(glGenTextures, glDeleteTextures);
 
-    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindTexture(GL_TEXTURE_2D, texture.get());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -492,17 +421,17 @@ void main()
                  GL_RGBA,
                  GL_FLOAT,
                  nullptr);
-    glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+    glBindImageTexture(
+        0, texture.get(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 
     return texture;
 }
 
-[[nodiscard]] GLuint create_target_texture(GLsizei width, GLsizei height)
+[[nodiscard]] auto create_target_texture(GLsizei width, GLsizei height)
 {
-    GLuint texture {};
-    glGenTextures(1, &texture);
+    auto texture = create_object(glGenTextures, glDeleteTextures);
 
-    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindTexture(GL_TEXTURE_2D, texture.get());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -516,18 +445,17 @@ void main()
                  GL_RGBA,
                  GL_UNSIGNED_BYTE,
                  nullptr);
-    glBindImageTexture(5, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(
+        5, texture.get(), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
     return texture;
 }
 
-[[nodiscard]] GLuint create_framebuffer(GLuint texture)
+[[nodiscard]] auto create_framebuffer(GLuint texture)
 {
-    GLuint fbo {};
-    glGenFramebuffers(1, &fbo);
-    SCOPE_FAIL([&fbo] { glDeleteFramebuffers(1, &fbo); });
+    auto fbo = create_object(glGenFramebuffers, glDeleteFramebuffers);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
     glFramebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
@@ -571,16 +499,13 @@ void main()
     return fbo;
 }
 
-[[maybe_unused]] [[nodiscard]] std::pair<GLuint, GLuint>
-create_vao_vbo(unsigned int num_vertices)
+[[maybe_unused]] [[nodiscard]] auto create_vao_vbo(unsigned int num_vertices)
 {
-    GLuint vao {};
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+    auto vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
+    glBindVertexArray(vao.get());
 
-    GLuint vbo {};
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    auto vbo = create_object(glGenBuffers, glDeleteBuffers);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo.get());
     glBufferData(GL_ARRAY_BUFFER,
                  num_vertices * 2 * sizeof(float),
                  nullptr,
@@ -589,22 +514,21 @@ create_vao_vbo(unsigned int num_vertices)
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
 
-    return {vao, vbo};
+    return std::pair {std::move(vao), std::move(vbo)};
 }
 
 template <typename T>
-[[nodiscard]] GLuint create_storage_buffer(GLuint binding,
-                                           const std::vector<T> &data)
+[[nodiscard]] auto create_storage_buffer(GLuint binding,
+                                         const std::vector<T> &data)
 {
-    GLuint ssbo {};
-    glGenBuffers(1, &ssbo);
+    auto ssbo = create_object(glGenBuffers, glDeleteBuffers);
 
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo.get());
     glBufferData(GL_SHADER_STORAGE_BUFFER,
                  static_cast<GLsizeiptr>(data.size() * sizeof(T)),
                  data.data(),
                  GL_DYNAMIC_READ);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo.get());
 
     return ssbo;
 }
@@ -738,49 +662,35 @@ void run()
 #endif
 
     const auto compute_program = create_compute_program("trace.comp");
-    SCOPE_EXIT([compute_program] { glDeleteProgram(compute_program); });
 
     const auto loc_sample_index =
-        glGetUniformLocation(compute_program, "sample_index");
+        glGetUniformLocation(compute_program.get(), "sample_index");
     const auto loc_samples_per_frame =
-        glGetUniformLocation(compute_program, "samples_per_frame");
+        glGetUniformLocation(compute_program.get(), "samples_per_frame");
     const auto loc_view_position =
-        glGetUniformLocation(compute_program, "view_position");
+        glGetUniformLocation(compute_program.get(), "view_position");
     const auto loc_view_size =
-        glGetUniformLocation(compute_program, "view_size");
+        glGetUniformLocation(compute_program.get(), "view_size");
 
     const auto post_program = create_compute_program("post.comp");
-    SCOPE_EXIT([post_program] { glDeleteProgram(post_program); });
 
     const auto accumulation_texture =
         create_accumulation_texture(texture_width, texture_height);
-    SCOPE_EXIT([&accumulation_texture]
-               { glDeleteTextures(1, &accumulation_texture); });
 
     const auto target_texture =
         create_target_texture(texture_width, texture_height);
-    SCOPE_EXIT([&target_texture] { glDeleteTextures(1, &target_texture); });
 
-    const auto fbo = create_framebuffer(target_texture);
-    SCOPE_EXIT([&fbo] { glDeleteFramebuffers(1, &fbo); });
+    const auto fbo = create_framebuffer(target_texture.get());
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-    GLuint query_start {};
-    GLuint query_end {};
-    glGenQueries(1, &query_start);
-    SCOPE_EXIT([&query_start] { glDeleteQueries(1, &query_start); });
-    glGenQueries(1, &query_end);
-    SCOPE_EXIT([&query_end] { glDeleteQueries(1, &query_end); });
+    const auto query_start = create_object(glGenQueries, glDeleteQueries);
+    const auto query_end = create_object(glGenQueries, glDeleteQueries);
 
     const auto materials_ssbo = create_storage_buffer(1, scene.materials);
-    SCOPE_EXIT([&materials_ssbo] { glDeleteBuffers(1, &materials_ssbo); });
     const auto circles_ssbo = create_storage_buffer(2, scene.circles);
-    SCOPE_EXIT([&circles_ssbo] { glDeleteBuffers(1, &circles_ssbo); });
     const auto lines_ssbo = create_storage_buffer(3, scene.lines);
-    SCOPE_EXIT([&lines_ssbo] { glDeleteBuffers(1, &lines_ssbo); });
     const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
-    SCOPE_EXIT([&arcs_ssbo] { glDeleteBuffers(1, &arcs_ssbo); });
 
     constexpr unsigned int max_samples {200'000};
     unsigned int sample_index {0};
@@ -905,7 +815,7 @@ void run()
 
         if (auto_workload)
         {
-            glQueryCounter(query_start, GL_TIMESTAMP);
+            glQueryCounter(query_start.get(), GL_TIMESTAMP);
         }
 
         glViewport(0, 0, framebuffer_width, framebuffer_height);
@@ -916,7 +826,7 @@ void run()
         {
             const auto samples_this_frame =
                 std::min(samples_per_frame, max_samples - sample_index);
-            glUseProgram(compute_program);
+            glUseProgram(compute_program.get());
             glUniform1ui(loc_sample_index, sample_index);
             glUniform1ui(loc_samples_per_frame, samples_this_frame);
             glUniform2f(loc_view_position, view_x, view_y);
@@ -933,7 +843,7 @@ void run()
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-            glUseProgram(post_program);
+            glUseProgram(post_program.get());
             glDispatchCompute(num_groups_x, num_groups_y, 1);
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
@@ -954,7 +864,7 @@ void run()
 
         if (auto_workload)
         {
-            glQueryCounter(query_end, GL_TIMESTAMP);
+            glQueryCounter(query_end.get(), GL_TIMESTAMP);
         }
 
         glfwSwapBuffers(window.get());
@@ -981,8 +891,9 @@ void run()
         {
             GLuint64 start_time {};
             GLuint64 end_time {};
-            glGetQueryObjectui64v(query_start, GL_QUERY_RESULT, &start_time);
-            glGetQueryObjectui64v(query_end, GL_QUERY_RESULT, &end_time);
+            glGetQueryObjectui64v(
+                query_start.get(), GL_QUERY_RESULT, &start_time);
+            glGetQueryObjectui64v(query_end.get(), GL_QUERY_RESULT, &end_time);
             const auto elapsed =
                 static_cast<double>(end_time - start_time) / 1e9;
             constexpr double target_compute_per_frame {0.014};
