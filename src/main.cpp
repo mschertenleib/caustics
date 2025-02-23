@@ -189,8 +189,8 @@ struct Arc
 {
     alignas(16) float center[2];
     float radius;
-    float angle_min;
-    float angle_max;
+    alignas(8) float a[2];
+    float b;
     unsigned int material_id;
 };
 
@@ -622,8 +622,8 @@ void run()
                   Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
         .arcs = {Arc {{0.6f, 0.6f},
                       0.1f,
-                      0.0f,
-                      -2.0f * std::numbers::pi_v<float> / 3.0f,
+                      {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
+                      -0.04f,
                       3}}};
 #else
     Scene scene {

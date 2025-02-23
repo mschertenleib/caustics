@@ -30,8 +30,8 @@ struct Arc
 {
     vec2 center;
     float radius;
-    float angle_min;
-    float angle_max;
+    vec2 a;
+    float b;
     uint material_id;
 };
 
@@ -138,7 +138,7 @@ bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t, 
     return false;
 }
 
-bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, float angle_min, float angle_max, inout float t)
+bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, vec2 a, float b, inout float t)
 {
     const vec2 oc = center - origin;
     const float oc_dot_dir = dot(oc, direction);
@@ -152,10 +152,8 @@ bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, float
     const float t1 = oc_dot_dir - sqrt_discriminant;
     if (t1 > 0.0 && t1 < t)
     {
-        const vec2 hit_pos = origin + t1 * direction - center;
-        const float angle = atan(hit_pos.y, hit_pos.x); // [-pi, pi]
-        if ((angle_max >= angle_min && angle >= angle_min && angle <= angle_max) ||
-            (angle_max < angle_min && (angle >= angle_min || angle <= angle_max)))
+        const vec2 rel_hit_pos = origin + t1 * direction - center;
+        if (dot(a, rel_hit_pos) >= b)
         {
             t = t1;
             return true;
@@ -165,10 +163,8 @@ bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, float
     const float t2 = oc_dot_dir + sqrt_discriminant;
     if (t2 > 0.0 && t2 < t)
     {
-        const vec2 hit_pos = origin + t2 * direction - center;
-        const float angle = atan(hit_pos.y, hit_pos.x); // [-pi, pi]
-        if ((angle_max >= angle_min && angle >= angle_min && angle <= angle_max) ||
-            (angle_max < angle_min && (angle >= angle_min || angle <= angle_max)))
+        const vec2 rel_hit_pos = origin + t2 * direction - center;
+        if (dot(a, rel_hit_pos) >= b)
         {
             t = t2;
             return true;
@@ -202,7 +198,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
     }
     for (uint i = 0; i < arcs.length(); ++i)
     {
-        if (intersect_arc(origin, direction, arcs[i].center, arcs[i].radius, arcs[i].angle_min, arcs[i].angle_max, t))
+        if (intersect_arc(origin, direction, arcs[i].center, arcs[i].radius, arcs[i].a, arcs[i].b, t))
         {
             geometry_type = GEOMETRY_ARC;
             geometry_index = i;
