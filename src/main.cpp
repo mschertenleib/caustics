@@ -149,6 +149,87 @@ private:
 #define SCOPE_EXIT(f)            const Scope_exit CONCATENATE(scope_exit_, __LINE__)(f)
 #define SCOPE_FAIL(f)            const Scope_fail CONCATENATE(scope_fail_, __LINE__)(f)
 
+template <typename Destroy>
+class GL_object
+{
+public:
+    constexpr GL_object(GLuint object, Destroy &&destroy) noexcept
+        : m_object {object}, m_destroy {std::move(destroy)}
+    {
+    }
+
+    constexpr GL_object(GLuint object, const Destroy &destroy) noexcept
+        : m_object {object}, m_destroy {destroy}
+    {
+    }
+
+    constexpr GL_object(GL_object &&rhs) noexcept
+    {
+        swap(rhs);
+    }
+
+    constexpr GL_object &operator=(GL_object &&rhs) noexcept
+    {
+        GL_object tmp(std::move(rhs));
+        swap(tmp);
+        return *this;
+    }
+
+    GL_object(const GL_object &) = delete;
+    GL_object &operator=(const GL_object &) = delete;
+
+    constexpr ~GL_object() noexcept
+    {
+        if (m_object != 0)
+        {
+            m_destroy(m_object);
+        }
+    }
+
+    [[nodiscard]] constexpr GLuint get() const noexcept
+    {
+        return m_object;
+    }
+
+    constexpr void swap(GL_object &rhs) noexcept
+    {
+        std::swap(m_object, rhs.m_object);
+        std::swap(m_destroy, rhs.m_destroy);
+    }
+
+private:
+    GLuint m_object {0};
+    Destroy m_destroy {};
+};
+
+[[nodiscard]] auto create_object(GLuint (*create)(), void (*destroy)(GLuint))
+{
+    assert(create);
+    assert(destroy);
+
+    return GL_object(create(), destroy);
+}
+
+[[nodiscard]] auto
+create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
+{
+    assert(create);
+    assert(destroy);
+
+    return GL_object(create(arg), destroy);
+}
+
+[[nodiscard]] auto create_object(void (*create)(GLsizei, GLuint *),
+                                 void (*destroy)(GLsizei, const GLuint *))
+{
+    assert(create);
+    assert(destroy);
+
+    GLuint object {};
+    create(1, &object);
+    return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
+}
+
 struct Rectangle
 {
     int x0;
@@ -157,13 +238,13 @@ struct Rectangle
     int y1;
 };
 
-struct vec2
+struct Vec2
 {
     float x;
     float y;
 };
 
-struct vec3
+struct Vec3
 {
     float x;
     float y;
@@ -179,30 +260,30 @@ enum struct Material_type
 
 struct Material
 {
-    alignas(16) vec3 color;
-    alignas(16) vec3 emissivity;
+    alignas(16) Vec3 color;
+    alignas(16) Vec3 emissivity;
     alignas(4) Material_type type;
 };
 
 struct Circle
 {
-    alignas(16) vec2 center;
+    alignas(16) Vec2 center;
     float radius;
     unsigned int material_id;
 };
 
 struct Line
 {
-    alignas(16) vec2 a;
-    alignas(8) vec2 b;
+    alignas(16) Vec2 a;
+    alignas(8) Vec2 b;
     unsigned int material_id;
 };
 
 struct Arc
 {
-    alignas(16) vec2 center;
+    alignas(16) Vec2 center;
     float radius;
-    alignas(8) vec2 a;
+    alignas(8) Vec2 a;
     float b;
     unsigned int material_id;
 };
