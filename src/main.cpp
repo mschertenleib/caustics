@@ -157,6 +157,19 @@ struct Rectangle
     int y1;
 };
 
+struct vec2
+{
+    float x;
+    float y;
+};
+
+struct vec3
+{
+    float x;
+    float y;
+    float z;
+};
+
 enum struct Material_type
 {
     diffuse,
@@ -166,30 +179,30 @@ enum struct Material_type
 
 struct Material
 {
-    alignas(16) float color[3];
-    alignas(16) float emissivity[3];
+    alignas(16) vec3 color;
+    alignas(16) vec3 emissivity;
     alignas(4) Material_type type;
 };
 
 struct Circle
 {
-    alignas(16) float center[2];
+    alignas(16) vec2 center;
     float radius;
     unsigned int material_id;
 };
 
 struct Line
 {
-    alignas(16) float a[2];
-    alignas(8) float b[2];
+    alignas(16) vec2 a;
+    alignas(8) vec2 b;
     unsigned int material_id;
 };
 
 struct Arc
 {
-    alignas(16) float center[2];
+    alignas(16) vec2 center;
     float radius;
-    alignas(8) float a[2];
+    alignas(8) vec2 a;
     float b;
     unsigned int material_id;
 };
@@ -291,100 +304,99 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
 [[nodiscard]] GLuint create_shader(GLenum type, const char *code)
 {
-    const auto shader_id = glCreateShader(type);
-    SCOPE_FAIL([shader_id] { glDeleteShader(shader_id); });
+    const auto shader = glCreateShader(type);
+    SCOPE_FAIL([shader] { glDeleteShader(shader); });
 
-    glShaderSource(shader_id, 1, &code, nullptr);
-    glCompileShader(shader_id);
+    glShaderSource(shader, 1, &code, nullptr);
+    glCompileShader(shader);
 
     int success {};
-    glGetShaderiv(shader_id, GL_COMPILE_STATUS, &success);
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
     if (!success)
     {
         int buf_length {};
-        glGetShaderiv(shader_id, GL_INFO_LOG_LENGTH, &buf_length);
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &buf_length);
         std::string message(static_cast<std::size_t>(buf_length), '\0');
-        glGetShaderInfoLog(shader_id, buf_length, nullptr, message.data());
+        glGetShaderInfoLog(shader, buf_length, nullptr, message.data());
         std::ostringstream oss;
         oss << "Shader compilation failed:\n" << message << '\n';
         throw std::runtime_error(oss.str());
     }
 
-    return shader_id;
+    return shader;
 }
 
-[[nodiscard]] GLuint create_program(auto &&...shader_ids)
+[[nodiscard]] GLuint create_program(auto &&...shaders)
 {
-    const auto program_id = glCreateProgram();
-    SCOPE_FAIL([program_id] { glDeleteProgram(program_id); });
+    const auto program = glCreateProgram();
+    SCOPE_FAIL([program] { glDeleteProgram(program); });
 
-    (glAttachShader(program_id, shader_ids), ...);
-    glLinkProgram(program_id);
+    (glAttachShader(program, shaders), ...);
+    glLinkProgram(program);
 
     int success {};
-    glGetProgramiv(program_id, GL_LINK_STATUS, &success);
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
     if (!success)
     {
         int buf_length {};
-        glGetProgramiv(program_id, GL_INFO_LOG_LENGTH, &buf_length);
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &buf_length);
         std::string message(static_cast<std::size_t>(buf_length), '\0');
-        glGetProgramInfoLog(program_id, buf_length, nullptr, message.data());
+        glGetProgramInfoLog(program, buf_length, nullptr, message.data());
         std::ostringstream oss;
         oss << "Program linking failed:\n" << message << '\n';
         throw std::runtime_error(oss.str());
     }
 
-    return program_id;
+    return program;
 }
 
 [[nodiscard]] GLuint create_compute_program(const char *file_name)
 {
     const auto shader_code = read_file(file_name);
     const auto c_shader_code = shader_code.c_str();
-    const auto shader_id = create_shader(GL_COMPUTE_SHADER, c_shader_code);
-    SCOPE_EXIT([shader_id] { glDeleteShader(shader_id); });
+    const auto shader = create_shader(GL_COMPUTE_SHADER, c_shader_code);
+    SCOPE_EXIT([shader] { glDeleteShader(shader); });
 
-    const auto program_id = create_program(shader_id);
+    const auto program = create_program(shader);
 
-    return program_id;
+    return program;
 }
 
 [[maybe_unused]] [[nodiscard]] GLuint create_vert_frag_program()
 {
-    constexpr auto vertex_shader = R"(#version 430
+    constexpr auto vertex_shader_code = R"(#version 430
 layout (location = 0) in vec2 vertex_position;
 void main()
 {
     gl_Position = vec4(vertex_position, 0.0, 1.0);
 })";
 
-    constexpr auto fragment_shader = R"(#version 430
+    constexpr auto fragment_shader_code = R"(#version 430
 out vec4 frag_color;
 void main()
 {
     frag_color = vec4(1.0, 0.0, 1.0, 1.0);
 })";
 
-    const auto vertex_shader_id =
-        create_shader(GL_VERTEX_SHADER, vertex_shader);
-    SCOPE_EXIT([vertex_shader_id] { glDeleteShader(vertex_shader_id); });
+    const auto vertex_shader =
+        create_shader(GL_VERTEX_SHADER, vertex_shader_code);
+    SCOPE_EXIT([vertex_shader] { glDeleteShader(vertex_shader); });
 
-    const auto fragment_shader_id =
-        create_shader(GL_FRAGMENT_SHADER, fragment_shader);
-    SCOPE_EXIT([fragment_shader_id] { glDeleteShader(fragment_shader_id); });
+    const auto fragment_shader =
+        create_shader(GL_FRAGMENT_SHADER, fragment_shader_code);
+    SCOPE_EXIT([fragment_shader] { glDeleteShader(fragment_shader); });
 
-    const auto program_id =
-        create_program(vertex_shader_id, fragment_shader_id);
+    const auto program = create_program(vertex_shader, fragment_shader);
 
-    return program_id;
+    return program;
 }
 
 [[nodiscard]] GLuint create_accumulation_texture(GLsizei width, GLsizei height)
 {
-    GLuint texture_id {};
-    glGenTextures(1, &texture_id);
+    GLuint texture {};
+    glGenTextures(1, &texture);
 
-    glBindTexture(GL_TEXTURE_2D, texture_id);
+    glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -398,18 +410,17 @@ void main()
                  GL_RGBA,
                  GL_FLOAT,
                  nullptr);
-    glBindImageTexture(
-        0, texture_id, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+    glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 
-    return texture_id;
+    return texture;
 }
 
 [[nodiscard]] GLuint create_target_texture(GLsizei width, GLsizei height)
 {
-    GLuint texture_id {};
-    glGenTextures(1, &texture_id);
+    GLuint texture {};
+    glGenTextures(1, &texture);
 
-    glBindTexture(GL_TEXTURE_2D, texture_id);
+    glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -423,20 +434,20 @@ void main()
                  GL_RGBA,
                  GL_UNSIGNED_BYTE,
                  nullptr);
-    glBindImageTexture(5, texture_id, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(5, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
-    return texture_id;
+    return texture;
 }
 
-[[nodiscard]] GLuint create_framebuffer(GLuint texture_id)
+[[nodiscard]] GLuint create_framebuffer(GLuint texture)
 {
-    GLuint fbo_id {};
-    glGenFramebuffers(1, &fbo_id);
-    SCOPE_FAIL([&fbo_id] { glDeleteFramebuffers(1, &fbo_id); });
+    GLuint fbo {};
+    glGenFramebuffers(1, &fbo);
+    SCOPE_FAIL([&fbo] { glDeleteFramebuffers(1, &fbo); });
 
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_id);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(
-        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_id, 0);
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
     const auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE)
@@ -475,7 +486,7 @@ void main()
         throw std::runtime_error(oss.str());
     }
 
-    return fbo_id;
+    return fbo;
 }
 
 [[maybe_unused]] [[nodiscard]] std::pair<GLuint, GLuint>
@@ -499,16 +510,21 @@ create_vao_vbo(unsigned int num_vertices)
     return {vao, vbo};
 }
 
-[[maybe_unused]] [[nodiscard]] GLuint create_storage_buffer(unsigned int size)
+template <typename T>
+[[nodiscard]] GLuint create_storage_buffer(GLuint binding,
+                                           const std::vector<T> &data)
 {
-    GLuint ssbo_id {};
-    glGenBuffers(1, &ssbo_id);
+    GLuint ssbo {};
+    glGenBuffers(1, &ssbo);
 
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_id);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, size, nullptr, GL_DYNAMIC_READ);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ssbo_id);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+                 static_cast<GLsizeiptr>(data.size() * sizeof(T)),
+                 data.data(),
+                 GL_DYNAMIC_READ);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo);
 
-    return ssbo_id;
+    return ssbo;
 }
 
 [[nodiscard]] constexpr unsigned int align_up(unsigned int value,
@@ -670,31 +686,14 @@ void run()
     glGenQueries(1, &query_end);
     SCOPE_EXIT([&query_end] { glDeleteQueries(1, &query_end); });
 
-    struct
-    {
-        GLuint materials;
-        GLuint circles;
-        GLuint lines;
-        GLuint arcs;
-    } ssbos {};
-    glGenBuffers(4, reinterpret_cast<GLuint *>(&ssbos));
-    SCOPE_EXIT([&ssbos]
-               { glDeleteBuffers(4, reinterpret_cast<GLuint *>(&ssbos)); });
-
-    const auto buffer_data =
-        []<typename T>(const std::vector<T> &data, GLuint ssbo, GLuint binding)
-    {
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
-        glBufferData(GL_SHADER_STORAGE_BUFFER,
-                     static_cast<GLsizeiptr>(data.size() * sizeof(T)),
-                     data.data(),
-                     GL_DYNAMIC_READ);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo);
-    };
-    buffer_data(scene.materials, ssbos.materials, 1);
-    buffer_data(scene.circles, ssbos.circles, 2);
-    buffer_data(scene.lines, ssbos.lines, 3);
-    buffer_data(scene.arcs, ssbos.arcs, 4);
+    const auto materials_ssbo = create_storage_buffer(1, scene.materials);
+    SCOPE_EXIT([&materials_ssbo] { glDeleteBuffers(1, &materials_ssbo); });
+    const auto circles_ssbo = create_storage_buffer(2, scene.circles);
+    SCOPE_EXIT([&circles_ssbo] { glDeleteBuffers(1, &circles_ssbo); });
+    const auto lines_ssbo = create_storage_buffer(3, scene.lines);
+    SCOPE_EXIT([&lines_ssbo] { glDeleteBuffers(1, &lines_ssbo); });
+    const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
+    SCOPE_EXIT([&arcs_ssbo] { glDeleteBuffers(1, &arcs_ssbo); });
 
     constexpr unsigned int max_samples {200'000};
     unsigned int sample_index {0};
