@@ -701,6 +701,7 @@ void run()
     unsigned int samples_per_frame {1};
 
     double last_time {glfwGetTime()};
+    unsigned int sum_samples {0};
     int num_frames {0};
 
     bool s_pressed {false};
@@ -841,6 +842,7 @@ void run()
             };
             glDispatchCompute(num_groups_x, num_groups_y, 1);
             sample_index += samples_this_frame;
+            sum_samples += samples_this_frame;
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
@@ -863,27 +865,24 @@ void run()
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
-        ++num_frames;
-        const double current_time {glfwGetTime()};
-        if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
-        {
-            std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
-                      << elapsed * 1000.0 / static_cast<double>(num_frames)
-                      << " ms/frame, " << sample_index
-                      << (sample_index > 1 ? " samples, " : " sample, ")
-                      << samples_per_frame
-                      << (samples_per_frame > 1 ? " samples/frame\n"
-                                                : " sample/frame\n");
-            num_frames = 0;
-            last_time = current_time;
-        }
-
         if (auto_workload)
         {
             glQueryCounter(query_end, GL_TIMESTAMP);
         }
 
         glfwSwapBuffers(window);
+
+        ++num_frames;
+        const double current_time {glfwGetTime()};
+        if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
+        {
+            std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
+                      << samples_per_frame << " samples/frame, " << sum_samples
+                      << " samples/s, " << sample_index << " samples\n";
+            num_frames = 0;
+            last_time = current_time;
+            sum_samples = 0;
+        }
 
         // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
         // Intel with Mesa drivers return non-sense numbers, rendering them
