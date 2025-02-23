@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
@@ -646,25 +647,30 @@ void run()
     {
         throw std::runtime_error("Failed to initialize GLFW");
     }
-    SCOPE_EXIT([] { glfwTerminate(); });
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
-    const auto window =
-        glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
-    if (window == nullptr)
+    auto window_ptr = glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
+    if (window_ptr == nullptr)
     {
+        glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
-    SCOPE_EXIT([window] { glfwDestroyWindow(window); });
+    const auto destroy_window = [](GLFWwindow *window)
+    {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+    };
+    const std::unique_ptr<GLFWwindow, decltype(destroy_window)> window(
+        window_ptr, destroy_window);
 
-    glfwMakeContextCurrent(window);
+    glfwMakeContextCurrent(window.get());
     glfwSwapInterval(1);
 
     float x_scale {};
     float y_scale {};
-    glfwGetWindowContentScale(window, &x_scale, &y_scale);
+    glfwGetWindowContentScale(window.get(), &x_scale, &y_scale);
 
     load_gl_functions();
 
@@ -791,16 +797,17 @@ void run()
     float drag_source_view_x {};
     float drag_source_view_y {};
 
-    glfwSetScrollCallback(window, &glfw_scroll_callback);
+    glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
 
-    while (!glfwWindowShouldClose(window))
+    while (!glfwWindowShouldClose(window.get()))
     {
         scroll_offset = 0.0;
         glfwPollEvents();
 
         int framebuffer_width {};
         int framebuffer_height {};
-        glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
+        glfwGetFramebufferSize(
+            window.get(), &framebuffer_width, &framebuffer_height);
 
         const auto [x0, y0, x1, y1] = centered_rectangle(texture_width,
                                                          texture_height,
@@ -809,12 +816,12 @@ void run()
 
         // FIXME: all of this should be done in callbacks
         if (const auto mouse_state =
-                glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
+                glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT);
             mouse_state == GLFW_PRESS)
         {
             double xpos {};
             double ypos {};
-            glfwGetCursorPos(window, &xpos, &ypos);
+            glfwGetCursorPos(window.get(), &xpos, &ypos);
 
             if (!dragging)
             {
@@ -850,7 +857,7 @@ void run()
 
             double xpos {};
             double ypos {};
-            glfwGetCursorPos(window, &xpos, &ypos);
+            glfwGetCursorPos(window.get(), &xpos, &ypos);
             const auto mouse_world_x =
                 view_x +
                 ((static_cast<float>(xpos) * x_scale - static_cast<float>(x0)) /
@@ -881,17 +888,17 @@ void run()
             sample_index = 0;
         }
 
-        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+        if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
         {
             sample_index = 0;
         }
 
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
+        if (glfwGetKey(window.get(), GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
         {
             s_pressed = true;
             save_as_png("out.png", texture_width, texture_height);
         }
-        else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_RELEASE)
+        else if (glfwGetKey(window.get(), GLFW_KEY_S) == GLFW_RELEASE)
         {
             s_pressed = false;
         }
@@ -950,7 +957,7 @@ void run()
             glQueryCounter(query_end, GL_TIMESTAMP);
         }
 
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(window.get());
 
         ++num_frames;
         const double current_time {glfwGetTime()};
