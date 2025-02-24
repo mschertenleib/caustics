@@ -240,7 +240,9 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, uint geometry_type, u
     {
         const Circle circle = circles[geometry_index];
         hit.position = origin + t * direction;
-        hit.normal = normalize(hit.position - circle.center);
+        // A negative radius means the object normal (defining the
+        // "outside" of solid objects) points towards the center
+        hit.normal = sign(circle.radius) * normalize(hit.position - circle.center);
         // Re-project the hit position onto the circle
         hit.position = circle.center + hit.normal * circle.radius;
         hit.material_id = circle.material_id;
@@ -259,7 +261,9 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, uint geometry_type, u
     {
         const Arc arc = arcs[geometry_index];
         hit.position = origin + t * direction;
-        hit.normal = normalize(hit.position - arc.center);
+        // A negative radius means the object normal (defining the
+        // "outside" of solid objects) points towards the center
+        hit.normal = sign(arc.radius) * normalize(hit.position - arc.center);
         // Re-project the hit position onto the arc
         hit.position = arc.center + hit.normal * arc.radius;
         hit.material_id = arc.material_id;
