@@ -563,6 +563,17 @@ void save_as_png(const char *file_name, int width, int height)
     std::cout << "Saved" << std::endl;
 }
 
+[[nodiscard]] constexpr float screen_to_world(double x,
+                                              int screen_min,
+                                              int screen_max,
+                                              float world_center,
+                                              float world_size) noexcept
+{
+    const auto u = (static_cast<float>(x) - static_cast<float>(screen_min)) /
+                   static_cast<float>(screen_max - screen_min);
+    return world_center + (u - 0.5f) * world_size;
+}
+
 void run()
 {
     glfwSetErrorCallback(&glfw_error_callback);
@@ -763,38 +774,24 @@ void run()
 
         if (scroll_offset != 0.0)
         {
-            constexpr float zoom_factor {1.5f};
-
             double xpos {};
             double ypos {};
             glfwGetCursorPos(window.get(), &xpos, &ypos);
+            const auto mouse_screen_x = static_cast<float>(xpos) * x_scale;
+            const auto mouse_screen_y = static_cast<float>(ypos) * y_scale;
             const auto mouse_world_x =
-                view_x +
-                ((static_cast<float>(xpos) * x_scale - static_cast<float>(x0)) /
-                     static_cast<float>(x1 - x0) -
-                 0.5f) *
-                    view_width;
+                screen_to_world(mouse_screen_x, x0, x1, view_x, view_width);
             const auto mouse_world_y =
-                view_y +
-                ((static_cast<float>(ypos) * y_scale - static_cast<float>(y0)) /
-                     static_cast<float>(y1 - y0) -
-                 0.5f) *
-                    view_height;
+                screen_to_world(mouse_screen_y, y0, y1, view_y, view_height);
 
-            if (scroll_offset > 0.0)
-            {
-                view_x += (mouse_world_x - view_x) * (zoom_factor - 1.0f);
-                view_y += (mouse_world_y - view_y) * (zoom_factor - 1.0f);
-                view_width /= zoom_factor;
-                view_height /= zoom_factor;
-            }
-            else
-            {
-                view_x -= (mouse_world_x - view_x) * (zoom_factor - 1.0f);
-                view_y -= (mouse_world_y - view_y) * (zoom_factor - 1.0f);
-                view_width *= zoom_factor;
-                view_height *= zoom_factor;
-            }
+            constexpr float zoom_factor {1.5f};
+            const auto zoom =
+                scroll_offset > 0.0 ? 1.0f / zoom_factor : zoom_factor;
+            view_x = mouse_world_x - (mouse_world_x - view_x) * zoom;
+            view_y = mouse_world_y - (mouse_world_y - view_y) * zoom;
+            view_width *= zoom;
+            view_height *= zoom;
+
             sample_index = 0;
         }
 
