@@ -648,15 +648,15 @@ void run()
             {Material {{0.75f, 0.75f, 0.75f},
                        {6.0f, 6.0f, 6.0f},
                        Material_type::diffuse},
-             Material {{0.75f, 0.25f, 0.25f}, {}, Material_type::dielectric},
-             Material {{0.25f, 0.25f, 0.75f}, {}, Material_type::dielectric},
+             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
+             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
              Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::specular},
              Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
-             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::dielectric}},
+             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
         .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
                     Circle {{0.5f, 0.3f}, 0.15f, 1},
                     Circle {{0.8f, 0.2f}, 0.05f, 2}},
-        .lines = {Line {{0.1f, 0.2f}, {0.35f, 0.05f}, 3},
+        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
                   Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
         .arcs = {Arc {{0.6f, 0.6f},
                       0.1f,
@@ -760,7 +760,7 @@ void run()
                     static_cast<float>(x1 - x0) * view_width;
                 const auto drag_world_y =
                     static_cast<float>(ypos - drag_source_mouse_y) * y_scale /
-                    static_cast<float>(y1 - y0) * view_height;
+                    static_cast<float>(y0 - y1) * view_height;
 
                 view_x = drag_source_view_x - drag_world_x;
                 view_y = drag_source_view_y - drag_world_y;
@@ -782,7 +782,7 @@ void run()
             const auto mouse_world_x =
                 screen_to_world(mouse_screen_x, x0, x1, view_x, view_width);
             const auto mouse_world_y =
-                screen_to_world(mouse_screen_y, y0, y1, view_y, view_height);
+                screen_to_world(mouse_screen_y, y1, y0, view_y, view_height);
 
             constexpr float zoom_factor {1.5f};
             const auto zoom =
@@ -846,16 +846,14 @@ void run()
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         }
 
-        // NOTE: we switch y0 and y1 to have (0, 0) in the
-        // top left corner
         glBlitFramebuffer(0,
                           0,
                           texture_width,
                           texture_height,
                           x0,
-                          y1,
-                          x1,
                           y0,
+                          x1,
+                          y1,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
