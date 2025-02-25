@@ -91,12 +91,12 @@ template <typename Destroy>
 class GL_object
 {
 public:
-    constexpr GL_object(GLuint object, Destroy &&destroy) noexcept
+    constexpr GL_object(GLuint object, Destroy &&destroy)
         : m_object {object}, m_destroy {std::move(destroy)}
     {
     }
 
-    constexpr GL_object(GLuint object, const Destroy &destroy) noexcept
+    constexpr GL_object(GLuint object, const Destroy &destroy)
         : m_object {object}, m_destroy {destroy}
     {
     }
@@ -192,41 +192,41 @@ struct Vec3
     float z;
 };
 
-enum struct Material_type
+enum struct Material_type : std::uint32_t
 {
     diffuse,
     specular,
     dielectric
 };
 
-struct Material
+struct alignas(16) Material
 {
     alignas(16) Vec3 color;
     alignas(16) Vec3 emissivity;
-    alignas(4) Material_type type;
+    Material_type type;
 };
 
-struct Circle
+struct alignas(16) Circle
 {
-    alignas(16) Vec2 center;
+    alignas(8) Vec2 center;
     float radius;
-    unsigned int material_id;
+    std::uint32_t material_id;
 };
 
-struct Line
+struct alignas(16) Line
 {
-    alignas(16) Vec2 a;
+    alignas(8) Vec2 a;
     alignas(8) Vec2 b;
-    unsigned int material_id;
+    std::uint32_t material_id;
 };
 
-struct Arc
+struct alignas(16) Arc
 {
-    alignas(16) Vec2 center;
+    alignas(8) Vec2 center;
     float radius;
     alignas(8) Vec2 a;
     float b;
-    unsigned int material_id;
+    std::uint32_t material_id;
 };
 
 struct Scene
