@@ -63,6 +63,7 @@ namespace
     f(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
     f(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);                    \
     f(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);            \
+    f(PFNGLDRAWELEMENTSPROC, glDrawElements);                                  \
     f(PFNGLDRAWARRAYSPROC, glDrawArrays);                                      \
     f(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
     f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
@@ -237,6 +238,13 @@ struct Scene
     std::vector<Arc> arcs;
 };
 
+struct Vertex
+{
+    Vec2 pos;
+    Vec2 uv;
+    Vec3 color;
+};
+
 void glfw_error_callback(int error, const char *description)
 {
     std::cerr << "GLFW error " << error << ": " << description << '\n';
@@ -373,32 +381,21 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 [[nodiscard]] auto create_compute_program(const char *file_name)
 {
     const auto shader_code = read_file(file_name);
-    const auto c_shader_code = shader_code.c_str();
-    const auto shader = create_shader(GL_COMPUTE_SHADER, c_shader_code);
+    const auto shader = create_shader(GL_COMPUTE_SHADER, shader_code.c_str());
 
     return create_program(shader.get());
 }
 
-[[maybe_unused]] [[nodiscard]] auto create_vert_frag_program()
+[[nodiscard]] auto create_draw_program(const char *vertex_shader_file_name,
+                                       const char *fragment_shader_file_name)
 {
-    constexpr auto vertex_shader_code = R"(#version 430
-layout (location = 0) in vec2 vertex_position;
-void main()
-{
-    gl_Position = vec4(vertex_position, 0.0, 1.0);
-})";
-
-    constexpr auto fragment_shader_code = R"(#version 430
-out vec4 frag_color;
-void main()
-{
-    frag_color = vec4(1.0, 0.0, 1.0, 1.0);
-})";
-
+    const auto vertex_shader_code = read_file(vertex_shader_file_name);
     const auto vertex_shader =
-        create_shader(GL_VERTEX_SHADER, vertex_shader_code);
+        create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
+
+    const auto fragment_shader_code = read_file(fragment_shader_file_name);
     const auto fragment_shader =
-        create_shader(GL_FRAGMENT_SHADER, fragment_shader_code);
+        create_shader(GL_FRAGMENT_SHADER, fragment_shader_code.c_str());
 
     return create_program(vertex_shader.get(), fragment_shader.get());
 }
@@ -499,7 +496,9 @@ void main()
     return fbo;
 }
 
-[[maybe_unused]] [[nodiscard]] auto create_vao_vbo(unsigned int num_vertices)
+[[nodiscard]] auto
+create_vertex_index_buffers(const std::vector<Vertex> &vertices,
+                            const std::vector<std::uint32_t> &indices)
 {
     auto vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
     glBindVertexArray(vao.get());
@@ -507,14 +506,40 @@ void main()
     auto vbo = create_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ARRAY_BUFFER, vbo.get());
     glBufferData(GL_ARRAY_BUFFER,
-                 num_vertices * 2 * sizeof(float),
-                 nullptr,
-                 GL_DYNAMIC_DRAW);
+                 static_cast<GLsizei>(vertices.size() * sizeof(Vertex)),
+                 vertices.data(),
+                 GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    auto ibo = create_object(glGenBuffers, glDeleteBuffers);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo.get());
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizei>(indices.size() * sizeof(std::uint32_t)),
+                 indices.data(),
+                 GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0,
+                          2,
+                          GL_FLOAT,
+                          GL_FALSE,
+                          sizeof(Vertex),
+                          reinterpret_cast<void *>(offsetof(Vertex, pos)));
+    glVertexAttribPointer(1,
+                          2,
+                          GL_FLOAT,
+                          GL_FALSE,
+                          sizeof(Vertex),
+                          reinterpret_cast<void *>(offsetof(Vertex, uv)));
+    glVertexAttribPointer(2,
+                          3,
+                          GL_FLOAT,
+                          GL_FALSE,
+                          sizeof(Vertex),
+                          reinterpret_cast<void *>(offsetof(Vertex, color)));
     glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
 
-    return std::pair {std::move(vao), std::move(vbo)};
+    return std::tuple {std::move(vao), std::move(vbo), std::move(ibo)};
 }
 
 template <typename T>
@@ -560,7 +585,7 @@ void save_as_png(const char *file_name, int width, int height)
         throw std::runtime_error(message.str());
     }
 
-    std::cout << "Saved" << std::endl;
+    std::cout << "Saved\n" << std::flush;
 }
 
 [[nodiscard]] constexpr float screen_to_world(double x,
@@ -663,13 +688,20 @@ void run()
                       {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
                       -0.04f,
                       3}}};
-#else
+#elif 0
     Scene scene {
         .materials = {Material {
             {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
         .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
         .lines = {},
         .arcs = {}};
+#else
+    Scene scene {.materials = {Material {{0.75f, 0.75f, 0.75f},
+                                         {6.0f, 6.0f, 6.0f},
+                                         Material_type::diffuse}},
+                 .circles = {},
+                 .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
+                 .arcs = {}};
 #endif
 
     const auto compute_program = create_compute_program("trace.comp");
@@ -702,6 +734,20 @@ void run()
     const auto circles_ssbo = create_storage_buffer(2, scene.circles);
     const auto lines_ssbo = create_storage_buffer(3, scene.lines);
     const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
+
+    const std::vector<Vertex> vertices {
+        Vertex {{0.3f, 0.2f}, {0.0f, 0.0f}, {}},
+        Vertex {{0.6f, 0.3f}, {1.0f, 0.0f}, {}},
+        Vertex {{0.5f, 0.5f}, {1.0f, 1.0f}, {}},
+        Vertex {{0.25f, 0.45f}, {0.0f, 1.0f}, {}}};
+    const std::vector<std::uint32_t> indices {0, 1, 2, 0, 2, 3};
+
+    const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
+    const auto draw_program = create_draw_program("shader.vert", "shader.frag");
+    const auto loc_view_position_draw =
+        glGetUniformLocation(draw_program.get(), "view_position");
+    const auto loc_view_size_draw =
+        glGetUniformLocation(draw_program.get(), "view_size");
 
     constexpr unsigned int max_samples {200'000};
     unsigned int sample_index {0};
@@ -815,7 +861,7 @@ void run()
             glQueryCounter(query_start.get(), GL_TIMESTAMP);
         }
 
-        glViewport(0, 0, framebuffer_width, framebuffer_height);
+        glViewport(x0, y0, x1 - x0, y1 - y0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
@@ -856,6 +902,14 @@ void run()
                           y1,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
+
+        glUseProgram(draw_program.get());
+        glUniform2f(loc_view_position_draw, view_x, view_y);
+        glUniform2f(loc_view_size_draw, view_width, view_height);
+        glDrawElements(GL_TRIANGLES,
+                       static_cast<GLsizei>(indices.size()),
+                       GL_UNSIGNED_INT,
+                       nullptr);
 
         if (auto_workload)
         {

@@ -50,7 +50,7 @@ target_link_libraries(caustics PRIVATE OpenGL::GL glfw)
 
 
 # NOTE: this custom target is for always copying the shaders to the binary directory
-set(SHADERS src/trace.comp src/post.comp)
+set(SHADERS src/trace.comp src/post.comp src/shader.vert src/shader.frag)
 add_custom_target(shaders ALL DEPENDS ${SHADERS})
 foreach (SHADER IN LISTS SHADERS)
     cmake_path(APPEND CMAKE_SOURCE_DIR ${SHADER} OUTPUT_VARIABLE SHADER)
