@@ -80,6 +80,7 @@ namespace
     f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
     f(PFNGLFINISHPROC, glFinish);                                              \
     f(PFNGLFLUSHPROC, glFlush);                                                \
+    f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
     f(PFNGLGETSTRINGPROC, glGetString);
 
 // clang-format off
@@ -902,6 +903,9 @@ void run()
                           y1,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
         glUseProgram(draw_program.get());
         glUniform2f(loc_view_position_draw, view_x, view_y);
