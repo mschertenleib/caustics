@@ -600,6 +600,59 @@ void save_as_png(const char *file_name, int width, int height)
     return world_center + (u - 0.5f) * world_size;
 }
 
+[[nodiscard]] auto create_vertices_indices(const Scene &scene)
+{
+    /*std::vector<Vertex> vertices {
+        Vertex {{0.3f, 0.2f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        Vertex {{0.6f, 0.3f}, {1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        Vertex {{0.5f, 0.5f}, {1.0f, 1.0f}, {0.0f, 0.0, 1.0f}},
+        Vertex {{0.25f, 0.45f}, {0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}}};
+    std::vector<std::uint32_t> indices {0, 1, 2, 0, 2, 3};*/
+
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+
+    const float thickness {0.005f};
+
+    // FIXME: this is temporary
+    const auto add = [](const Vec2 &u, const Vec2 &v)
+    { return Vec2 {u.x + v.x, u.y + v.y}; };
+    const auto sub = [](const Vec2 &u, const Vec2 &v)
+    { return Vec2 {u.x - v.x, u.y - v.y}; };
+    const auto mul = [](const Vec2 &v, float f)
+    { return Vec2 {v.x * f, v.y * f}; };
+    const auto normalize = [](const Vec2 &v)
+    {
+        const auto inv_norm = 1.0f / std::sqrt(v.x * v.x + v.y * v.y);
+        return Vec2 {v.x * inv_norm, v.y * inv_norm};
+    };
+
+    for (const auto &line : scene.lines)
+    {
+        const auto line_vec = sub(line.b, line.a);
+        const auto left =
+            mul(normalize(Vec2 {-line_vec.y, line_vec.x}), thickness);
+        const auto start_left = add(line.a, left);
+        const auto start_right = sub(line.a, left);
+        const auto end_right = sub(line.b, left);
+        const auto end_left = add(line.b, left);
+        const auto color = scene.materials[line.material_id].color;
+        const auto first_index = static_cast<std::uint32_t>(vertices.size());
+        vertices.push_back({start_left, {0.0f, 0.0f}, color});
+        vertices.push_back({start_right, {1.0f, 0.0f}, color});
+        vertices.push_back({end_right, {1.0f, 1.0f}, color});
+        vertices.push_back({end_left, {0.0f, 1.0f}, color});
+        indices.push_back(first_index + 0);
+        indices.push_back(first_index + 1);
+        indices.push_back(first_index + 2);
+        indices.push_back(first_index + 0);
+        indices.push_back(first_index + 2);
+        indices.push_back(first_index + 3);
+    }
+
+    return std::pair {vertices, indices};
+}
+
 void run()
 {
     glfwSetErrorCallback(&glfw_error_callback);
@@ -676,7 +729,7 @@ void run()
                        Material_type::diffuse},
              Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
              Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
-             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::specular},
+             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
              Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
              Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
         .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
@@ -736,13 +789,7 @@ void run()
     const auto lines_ssbo = create_storage_buffer(3, scene.lines);
     const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
 
-    const std::vector<Vertex> vertices {
-        Vertex {{0.3f, 0.2f}, {0.0f, 0.0f}, {}},
-        Vertex {{0.6f, 0.3f}, {1.0f, 0.0f}, {}},
-        Vertex {{0.5f, 0.5f}, {1.0f, 1.0f}, {}},
-        Vertex {{0.25f, 0.45f}, {0.0f, 1.0f}, {}}};
-    const std::vector<std::uint32_t> indices {0, 1, 2, 0, 2, 3};
-
+    const auto [vertices, indices] = create_vertices_indices(scene);
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
     const auto draw_program = create_draw_program("shader.vert", "shader.frag");
     const auto loc_view_position_draw =
