@@ -737,11 +737,14 @@ void run()
                     Circle {{0.8f, 0.2f}, 0.05f, 2}},
         .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
                   Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
-        .arcs = {Arc {{0.6f, 0.6f},
-                      0.1f,
-                      {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
-                      -0.04f,
-                      3}}};
+        .arcs = {
+            Arc {{0.6f, 0.6f},
+                 0.1f,
+                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
+                 -0.04f,
+                 3},
+            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
+            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
 #elif 0
     Scene scene {
         .materials = {Material {
@@ -780,6 +783,9 @@ void run()
     const auto fbo = create_framebuffer(target_texture.get());
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
@@ -950,9 +956,6 @@ void run()
                           y1,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
         glUseProgram(draw_program.get());
         glUniform2f(loc_view_position_draw, view_x, view_y);
