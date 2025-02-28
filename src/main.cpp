@@ -173,14 +173,6 @@ create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
     return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
 }
 
-struct Rectangle
-{
-    int x0;
-    int y0;
-    int x1;
-    int y1;
-};
-
 struct Vec2
 {
     float x;
@@ -233,6 +225,10 @@ struct alignas(16) Arc
 
 struct Scene
 {
+    float view_x;
+    float view_y;
+    float view_width;
+    float view_height;
     std::vector<Material> materials;
     std::vector<Circle> circles;
     std::vector<Line> lines;
@@ -246,18 +242,242 @@ struct Vertex
     Vec3 color;
 };
 
+struct Viewport
+{
+    int x;
+    int y;
+    int width;
+    int height;
+};
+
+struct Application
+{
+    float window_scale_x;
+    float window_scale_y;
+    float mouse_world_x;
+    float mouse_world_y;
+    bool mouse_button_down;
+    float drag_source_world_x;
+    float drag_source_world_y;
+    float drag_source_view_x;
+    float drag_source_view_y;
+    Viewport viewport;
+    int texture_width;
+    int texture_height;
+    Scene scene;
+    unsigned int sample_index;
+};
+
+[[nodiscard]] constexpr unsigned int align_up(unsigned int value,
+                                              unsigned int alignment) noexcept
+{
+    assert((alignment & (alignment - 1)) == 0);
+    return (value + (alignment - 1)) & ~(alignment - 1);
+}
+
+[[nodiscard]] constexpr float screen_to_world(double x,
+                                              int screen_min,
+                                              int screen_size,
+                                              float world_center,
+                                              float world_size) noexcept
+{
+    const auto u = (static_cast<float>(x) - static_cast<float>(screen_min)) /
+                   static_cast<float>(screen_size);
+    return world_center + (u - 0.5f) * world_size;
+}
+
+[[nodiscard]] constexpr Viewport centered_viewport(int src_width,
+                                                   int src_height,
+                                                   int dst_width,
+                                                   int dst_height) noexcept
+{
+    const auto src_aspect_ratio =
+        static_cast<float>(src_width) / static_cast<float>(src_height);
+    const auto dst_aspect_ratio =
+        static_cast<float>(dst_width) / static_cast<float>(dst_height);
+    if (src_aspect_ratio > dst_aspect_ratio)
+    {
+        const auto height =
+            static_cast<int>(static_cast<float>(dst_width) / src_aspect_ratio);
+        return {0, (dst_height - height) / 2, dst_width, height};
+    }
+    else
+    {
+        const auto width =
+            static_cast<int>(static_cast<float>(dst_height) * src_aspect_ratio);
+        return {(dst_width - width) / 2, 0, width, dst_height};
+    }
+}
+
+void save_as_png(const char *file_name, int width, int height)
+{
+    std::cout << "Saving " << width << " x " << height << " image to \""
+              << file_name << "\"... " << std::flush;
+
+    glFinish();
+
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
+                                     static_cast<std::size_t>(height) * 4);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+    const auto write_result =
+        stbi_write_png(file_name, width, height, 4, pixels.data(), width * 4);
+    if (write_result == 0)
+    {
+        std::ostringstream message;
+        message << "Failed to write PNG image to \"" << file_name << '\"';
+        throw std::runtime_error(message.str());
+    }
+
+    std::cout << "Saved\n" << std::flush;
+}
+
 void glfw_error_callback(int error, const char *description)
 {
     std::cerr << "GLFW error " << error << ": " << description << '\n';
 }
 
-double scroll_offset {}; // FIXME: this shouldn't be global, but this will be
-                         // fixed when we move everything to callbacks
-void glfw_scroll_callback([[maybe_unused]] GLFWwindow *window,
+void glfw_cursor_pos_callback(GLFWwindow *window, double xpos, double ypos)
+{
+    auto *const app =
+        static_cast<Application *>(glfwGetWindowUserPointer(window));
+    assert(app != nullptr);
+
+    const auto print_one = [](auto &&arg) -> void { std::cout << arg << ' '; };
+    const auto print = [&](auto &&...args) -> void
+    {
+        (print_one(args), ...);
+        std::cout << '\n';
+    };
+
+    app->mouse_world_x =
+        screen_to_world(static_cast<float>(xpos) * app->window_scale_x,
+                        app->viewport.x,
+                        app->viewport.width,
+                        app->scene.view_x,
+                        app->scene.view_width);
+    app->mouse_world_y =
+        screen_to_world(static_cast<float>(ypos) * app->window_scale_y,
+                        app->viewport.y + app->viewport.height,
+                        -app->viewport.height,
+                        app->scene.view_y,
+                        app->scene.view_height);
+
+    if (app->mouse_button_down)
+    {
+        const auto drag_delta_world_x =
+            app->mouse_world_x - app->drag_source_world_x;
+        const auto drag_delta_world_y =
+            app->mouse_world_y - app->drag_source_world_y;
+
+        if (drag_delta_world_x != 0.0f || drag_delta_world_y != 0.0f)
+        {
+            print(app->scene.view_x, app->scene.view_y);
+            app->scene.view_x = app->drag_source_view_x - drag_delta_world_x;
+            app->scene.view_y = app->drag_source_view_y - drag_delta_world_y;
+
+            print(app->scene.view_x,
+                  app->scene.view_y,
+                  drag_delta_world_x,
+                  drag_delta_world_y,
+                  app->mouse_world_x,
+                  app->mouse_world_y);
+
+            app->sample_index = 0;
+        }
+    }
+}
+
+void glfw_mouse_button_callback(GLFWwindow *window,
+                                int button,
+                                int action,
+                                [[maybe_unused]] int mods)
+{
+    auto *const app =
+        static_cast<Application *>(glfwGetWindowUserPointer(window));
+    assert(app != nullptr);
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT)
+    {
+        if (action == GLFW_PRESS)
+        {
+            app->mouse_button_down = true;
+            app->drag_source_world_x = app->mouse_world_x;
+            app->drag_source_world_y = app->mouse_world_y;
+            app->drag_source_view_x = app->scene.view_x;
+            app->drag_source_view_y = app->scene.view_y;
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            app->mouse_button_down = false;
+        }
+    }
+}
+
+void glfw_scroll_callback(GLFWwindow *window,
                           [[maybe_unused]] double xoffset,
                           double yoffset)
 {
-    scroll_offset = yoffset;
+    auto *const app =
+        static_cast<Application *>(glfwGetWindowUserPointer(window));
+    assert(app != nullptr);
+
+    constexpr float zoom_factor {1.3f};
+    const auto zoom = yoffset > 0.0 ? 1.0f / zoom_factor : zoom_factor;
+    app->scene.view_x =
+        app->mouse_world_x - (app->mouse_world_x - app->scene.view_x) * zoom;
+    app->scene.view_y =
+        app->mouse_world_y - (app->mouse_world_y - app->scene.view_y) * zoom;
+    app->scene.view_width *= zoom;
+    app->scene.view_height *= zoom;
+
+    app->sample_index = 0;
+}
+
+void glfw_key_callback(GLFWwindow *window,
+                       int key,
+                       [[maybe_unused]] int scancode,
+                       int action,
+                       [[maybe_unused]] int mods)
+{
+    auto *const app =
+        static_cast<Application *>(glfwGetWindowUserPointer(window));
+    assert(app != nullptr);
+
+    if (action == GLFW_PRESS)
+    {
+        switch (key)
+        {
+        case GLFW_KEY_R: app->sample_index = 0; break;
+        case GLFW_KEY_S:
+            save_as_png("out.png", app->texture_width, app->texture_height);
+            break;
+        default: break;
+        }
+    }
+}
+
+void glfw_framebuffer_size_callback(GLFWwindow *window, int width, int height)
+{
+    auto *const app =
+        static_cast<Application *>(glfwGetWindowUserPointer(window));
+    assert(app != nullptr);
+
+    app->viewport = centered_viewport(
+        app->texture_width, app->texture_height, width, height);
+}
+
+void glfw_window_content_scale_callback(GLFWwindow *window,
+                                        float xscale,
+                                        float yscale)
+{
+    auto *const app =
+        static_cast<Application *>(glfwGetWindowUserPointer(window));
+    assert(app != nullptr);
+    std::cout << "Scale\n";
+
+    app->window_scale_x = xscale;
+    app->window_scale_y = yscale;
 }
 
 void load_gl_functions()
@@ -300,37 +520,6 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     std::ostringstream oss;
     oss << file.rdbuf();
     return oss.str();
-}
-
-[[nodiscard]] constexpr Rectangle centered_rectangle(int src_width,
-                                                     int src_height,
-                                                     int dst_width,
-                                                     int dst_height) noexcept
-{
-    const auto src_aspect_ratio =
-        static_cast<float>(src_width) / static_cast<float>(src_height);
-    const auto dst_aspect_ratio =
-        static_cast<float>(dst_width) / static_cast<float>(dst_height);
-    if (src_aspect_ratio > dst_aspect_ratio)
-    {
-        const auto height =
-            static_cast<int>(static_cast<float>(dst_width) / src_aspect_ratio);
-        const int x0 {0};
-        const int y0 {(dst_height - height) / 2};
-        const int x1 {dst_width};
-        const int y1 {y0 + height};
-        return {x0, y0, x1, y1};
-    }
-    else
-    {
-        const auto width =
-            static_cast<int>(static_cast<float>(dst_height) * src_aspect_ratio);
-        const int x0 {(dst_width - width) / 2};
-        const int y0 {0};
-        const int x1 {x0 + width};
-        const int y1 {dst_height};
-        return {x0, y0, x1, y1};
-    }
 }
 
 [[nodiscard]] auto create_shader(GLenum type, const char *code)
@@ -559,47 +748,6 @@ template <typename T>
     return ssbo;
 }
 
-[[nodiscard]] constexpr unsigned int align_up(unsigned int value,
-                                              unsigned int alignment) noexcept
-{
-    assert((alignment & (alignment - 1)) == 0);
-    return (value + (alignment - 1)) & ~(alignment - 1);
-}
-
-void save_as_png(const char *file_name, int width, int height)
-{
-    std::cout << "Saving " << width << " x " << height << " image to \""
-              << file_name << "\"... " << std::flush;
-
-    glFinish();
-
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
-                                     static_cast<std::size_t>(height) * 4);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-    const auto write_result =
-        stbi_write_png(file_name, width, height, 4, pixels.data(), width * 4);
-    if (write_result == 0)
-    {
-        std::ostringstream message;
-        message << "Failed to write PNG image to \"" << file_name << '\"';
-        throw std::runtime_error(message.str());
-    }
-
-    std::cout << "Saved\n" << std::flush;
-}
-
-[[nodiscard]] constexpr float screen_to_world(double x,
-                                              int screen_min,
-                                              int screen_max,
-                                              float world_center,
-                                              float world_size) noexcept
-{
-    const auto u = (static_cast<float>(x) - static_cast<float>(screen_min)) /
-                   static_cast<float>(screen_max - screen_min);
-    return world_center + (u - 0.5f) * world_size;
-}
-
 [[nodiscard]] auto create_vertices_indices(const Scene &scene)
 {
     /*std::vector<Vertex> vertices {
@@ -653,6 +801,113 @@ void save_as_png(const char *file_name, int width, int height)
     return std::pair {vertices, indices};
 }
 
+[[nodiscard]] Scene create_scene(float aspect_ratio)
+{
+    const float view_x {0.5f};
+    const float view_y {view_x / aspect_ratio};
+    const float view_width {1.0f};
+    const float view_height {view_width / aspect_ratio};
+
+#if 1
+    return Scene {
+        .view_x = view_x,
+        .view_y = view_y,
+        .view_width = view_width,
+        .view_height = view_height,
+        .materials =
+            {Material {{0.75f, 0.75f, 0.75f},
+                       {6.0f, 6.0f, 6.0f},
+                       Material_type::diffuse},
+             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
+             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
+             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
+             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
+             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
+        .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
+                    Circle {{0.5f, 0.3f}, 0.15f, 1},
+                    Circle {{0.8f, 0.2f}, 0.05f, 2}},
+        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
+                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
+        .arcs = {
+            Arc {{0.6f, 0.6f},
+                 0.1f,
+                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
+                 -0.04f,
+                 3},
+            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
+            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
+#elif 0
+    return Scene {
+        .view_x = view_x,
+        .view_y = view_y,
+        .view_width = view_width,
+        .view_height = view_height,
+        .materials = {Material {
+            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
+        .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
+        .lines = {},
+        .arcs = {}};
+#else
+    return Scene {.view_x = view_x,
+                  .view_y = view_y,
+                  .view_width = view_width,
+                  .view_height = view_height,
+                  .materials = {Material {{0.75f, 0.75f, 0.75f},
+                                          {6.0f, 6.0f, 6.0f},
+                                          Material_type::diffuse}},
+                  .circles = {},
+                  .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
+                  .arcs = {}};
+#endif
+}
+
+[[nodiscard]] Application init_app_state(GLFWwindow *window)
+{
+    constexpr int texture_width {320};
+    constexpr int texture_height {240};
+
+    float window_scale_x {};
+    float window_scale_y {};
+    glfwGetWindowContentScale(window, &window_scale_x, &window_scale_y);
+
+    int framebuffer_width {};
+    int framebuffer_height {};
+    glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
+
+    double mouse_x {};
+    double mouse_y {};
+    glfwGetCursorPos(window, &mouse_x, &mouse_y);
+
+    const auto viewport = centered_viewport(
+        texture_width, texture_height, framebuffer_width, framebuffer_height);
+
+    const auto scene = create_scene(static_cast<float>(texture_width) /
+                                    static_cast<float>(texture_height));
+
+    return {.window_scale_x = window_scale_x,
+            .window_scale_y = window_scale_y,
+            .mouse_world_x = screen_to_world(mouse_x,
+                                             viewport.x,
+                                             viewport.width,
+                                             scene.view_x,
+                                             scene.view_width),
+            .mouse_world_y = screen_to_world(mouse_y,
+                                             viewport.y + viewport.height,
+                                             -viewport.height,
+                                             scene.view_y,
+                                             scene.view_height),
+            .mouse_button_down = false,
+            .drag_source_world_x = {},
+            .drag_source_world_y = {},
+            .drag_source_view_x = {},
+            .drag_source_view_y = {},
+            .viewport = viewport,
+            .texture_width = texture_width,
+            .texture_height = texture_height,
+            .scene = scene,
+            .sample_index = 0};
+}
+
 void run()
 {
     glfwSetErrorCallback(&glfw_error_callback);
@@ -682,9 +937,8 @@ void run()
     glfwMakeContextCurrent(window.get());
     glfwSwapInterval(1);
 
-    float x_scale {};
-    float y_scale {};
-    glfwGetWindowContentScale(window.get(), &x_scale, &y_scale);
+    auto app = init_app_state(window.get());
+    glfwSetWindowUserPointer(window.get(), &app);
 
     load_gl_functions();
 
@@ -712,55 +966,6 @@ void run()
         auto_workload = true;
     }
 
-    int texture_width {320};
-    int texture_height {240};
-    float view_x {0.5f};
-    float view_y {view_x * static_cast<float>(texture_height) /
-                  static_cast<float>(texture_width)};
-    float view_width {1.0f};
-    float view_height {view_width * static_cast<float>(texture_height) /
-                       static_cast<float>(texture_width)};
-
-#if 1
-    Scene scene {
-        .materials =
-            {Material {{0.75f, 0.75f, 0.75f},
-                       {6.0f, 6.0f, 6.0f},
-                       Material_type::diffuse},
-             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
-             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
-             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
-             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
-             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
-        .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
-                    Circle {{0.5f, 0.3f}, 0.15f, 1},
-                    Circle {{0.8f, 0.2f}, 0.05f, 2}},
-        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
-                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
-        .arcs = {
-            Arc {{0.6f, 0.6f},
-                 0.1f,
-                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
-                 -0.04f,
-                 3},
-            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
-            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
-#elif 0
-    Scene scene {
-        .materials = {Material {
-            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
-        .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
-        .lines = {},
-        .arcs = {}};
-#else
-    Scene scene {.materials = {Material {{0.75f, 0.75f, 0.75f},
-                                         {6.0f, 6.0f, 6.0f},
-                                         Material_type::diffuse}},
-                 .circles = {},
-                 .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
-                 .arcs = {}};
-#endif
-
     const auto compute_program = create_compute_program("trace.comp");
 
     const auto loc_sample_index =
@@ -775,10 +980,10 @@ void run()
     const auto post_program = create_compute_program("post.comp");
 
     const auto accumulation_texture =
-        create_accumulation_texture(texture_width, texture_height);
+        create_accumulation_texture(app.texture_width, app.texture_height);
 
     const auto target_texture =
-        create_target_texture(texture_width, texture_height);
+        create_target_texture(app.texture_width, app.texture_height);
 
     const auto fbo = create_framebuffer(target_texture.get());
 
@@ -790,12 +995,12 @@ void run()
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
 
-    const auto materials_ssbo = create_storage_buffer(1, scene.materials);
-    const auto circles_ssbo = create_storage_buffer(2, scene.circles);
-    const auto lines_ssbo = create_storage_buffer(3, scene.lines);
-    const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
+    const auto materials_ssbo = create_storage_buffer(1, app.scene.materials);
+    const auto circles_ssbo = create_storage_buffer(2, app.scene.circles);
+    const auto lines_ssbo = create_storage_buffer(3, app.scene.lines);
+    const auto arcs_ssbo = create_storage_buffer(4, app.scene.arcs);
 
-    const auto [vertices, indices] = create_vertices_indices(scene);
+    const auto [vertices, indices] = create_vertices_indices(app.scene);
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
     const auto draw_program = create_draw_program("shader.vert", "shader.frag");
     const auto loc_view_position_draw =
@@ -804,138 +1009,57 @@ void run()
         glGetUniformLocation(draw_program.get(), "view_size");
 
     constexpr unsigned int max_samples {200'000};
-    unsigned int sample_index {0};
     unsigned int samples_per_frame {1};
 
     double last_time {glfwGetTime()};
     unsigned int sum_samples {0};
     int num_frames {0};
 
-    bool s_pressed {false};
-    bool dragging {false};
-    double drag_source_mouse_x {};
-    double drag_source_mouse_y {};
-    float drag_source_view_x {};
-    float drag_source_view_y {};
-
     glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
+    glfwSetCursorPosCallback(window.get(), &glfw_cursor_pos_callback);
+    glfwSetMouseButtonCallback(window.get(), &glfw_mouse_button_callback);
+    glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
+    glfwSetKeyCallback(window.get(), &glfw_key_callback);
+    glfwSetFramebufferSizeCallback(window.get(),
+                                   &glfw_framebuffer_size_callback);
+    glfwSetWindowContentScaleCallback(window.get(),
+                                      &glfw_window_content_scale_callback);
 
     while (!glfwWindowShouldClose(window.get()))
     {
-        scroll_offset = 0.0;
         glfwPollEvents();
-
-        int framebuffer_width {};
-        int framebuffer_height {};
-        glfwGetFramebufferSize(
-            window.get(), &framebuffer_width, &framebuffer_height);
-
-        const auto [x0, y0, x1, y1] = centered_rectangle(texture_width,
-                                                         texture_height,
-                                                         framebuffer_width,
-                                                         framebuffer_height);
-
-        // FIXME: all of this should be done in callbacks
-        if (const auto mouse_state =
-                glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT);
-            mouse_state == GLFW_PRESS)
-        {
-            double xpos {};
-            double ypos {};
-            glfwGetCursorPos(window.get(), &xpos, &ypos);
-
-            if (!dragging)
-            {
-                dragging = true;
-                drag_source_mouse_x = xpos;
-                drag_source_mouse_y = ypos;
-                drag_source_view_x = view_x;
-                drag_source_view_y = view_y;
-            }
-            else
-            {
-                // Drag vector
-                const auto drag_world_x =
-                    static_cast<float>(xpos - drag_source_mouse_x) * x_scale /
-                    static_cast<float>(x1 - x0) * view_width;
-                const auto drag_world_y =
-                    static_cast<float>(ypos - drag_source_mouse_y) * y_scale /
-                    static_cast<float>(y0 - y1) * view_height;
-
-                view_x = drag_source_view_x - drag_world_x;
-                view_y = drag_source_view_y - drag_world_y;
-                sample_index = 0;
-            }
-        }
-        else if (mouse_state == GLFW_RELEASE)
-        {
-            dragging = false;
-        }
-
-        if (scroll_offset != 0.0)
-        {
-            double xpos {};
-            double ypos {};
-            glfwGetCursorPos(window.get(), &xpos, &ypos);
-            const auto mouse_screen_x = static_cast<float>(xpos) * x_scale;
-            const auto mouse_screen_y = static_cast<float>(ypos) * y_scale;
-            const auto mouse_world_x =
-                screen_to_world(mouse_screen_x, x0, x1, view_x, view_width);
-            const auto mouse_world_y =
-                screen_to_world(mouse_screen_y, y1, y0, view_y, view_height);
-
-            constexpr float zoom_factor {1.5f};
-            const auto zoom =
-                scroll_offset > 0.0 ? 1.0f / zoom_factor : zoom_factor;
-            view_x = mouse_world_x - (mouse_world_x - view_x) * zoom;
-            view_y = mouse_world_y - (mouse_world_y - view_y) * zoom;
-            view_width *= zoom;
-            view_height *= zoom;
-
-            sample_index = 0;
-        }
-
-        if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
-        {
-            sample_index = 0;
-        }
-
-        if (glfwGetKey(window.get(), GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
-        {
-            s_pressed = true;
-            save_as_png("out.png", texture_width, texture_height);
-        }
-        else if (glfwGetKey(window.get(), GLFW_KEY_S) == GLFW_RELEASE)
-        {
-            s_pressed = false;
-        }
 
         if (auto_workload)
         {
             glQueryCounter(query_start.get(), GL_TIMESTAMP);
         }
 
-        glViewport(x0, y0, x1 - x0, y1 - y0);
+        glViewport(app.viewport.x,
+                   app.viewport.y,
+                   app.viewport.width,
+                   app.viewport.height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        if (sample_index < max_samples)
+        if (app.sample_index < max_samples)
         {
             const auto samples_this_frame =
-                std::min(samples_per_frame, max_samples - sample_index);
+                std::min(samples_per_frame, max_samples - app.sample_index);
             glUseProgram(compute_program.get());
-            glUniform1ui(loc_sample_index, sample_index);
+            glUniform1ui(loc_sample_index, app.sample_index);
             glUniform1ui(loc_samples_per_frame, samples_this_frame);
-            glUniform2f(loc_view_position, view_x, view_y);
-            glUniform2f(loc_view_size, view_width, view_height);
+            glUniform2f(loc_view_position, app.scene.view_x, app.scene.view_y);
+            glUniform2f(
+                loc_view_size, app.scene.view_width, app.scene.view_height);
             unsigned int num_groups_x {
-                align_up(static_cast<unsigned int>(texture_width), 16) / 16,
+                align_up(static_cast<unsigned int>(app.texture_width), 16) / 16,
             };
             unsigned int num_groups_y {
-                align_up(static_cast<unsigned int>(texture_height), 16) / 16,
+                align_up(static_cast<unsigned int>(app.texture_height), 16) /
+                    16,
             };
             glDispatchCompute(num_groups_x, num_groups_y, 1);
-            sample_index += samples_this_frame;
+            app.sample_index += samples_this_frame;
             sum_samples += samples_this_frame;
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
@@ -948,18 +1072,19 @@ void run()
 
         glBlitFramebuffer(0,
                           0,
-                          texture_width,
-                          texture_height,
-                          x0,
-                          y0,
-                          x1,
-                          y1,
+                          app.texture_width,
+                          app.texture_height,
+                          app.viewport.x,
+                          app.viewport.y,
+                          app.viewport.x + app.viewport.width,
+                          app.viewport.y + app.viewport.height,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
         glUseProgram(draw_program.get());
-        glUniform2f(loc_view_position_draw, view_x, view_y);
-        glUniform2f(loc_view_size_draw, view_width, view_height);
+        glUniform2f(loc_view_position_draw, app.scene.view_x, app.scene.view_y);
+        glUniform2f(
+            loc_view_size_draw, app.scene.view_width, app.scene.view_height);
         glDrawElements(GL_TRIANGLES,
                        static_cast<GLsizei>(indices.size()),
                        GL_UNSIGNED_INT,
@@ -978,7 +1103,7 @@ void run()
         {
             std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
                       << samples_per_frame << " samples/frame, " << sum_samples
-                      << " samples/s, " << sample_index << " samples\n";
+                      << " samples/s, " << app.sample_index << " samples\n";
             num_frames = 0;
             last_time = current_time;
             sum_samples = 0;
@@ -990,7 +1115,7 @@ void run()
         // at all. We could technically have a workaround for this specific
         // platform, but that also assumes that GL_RENDERER will always return a
         // string correctly identifying the driver (what happens on WebGL?).
-        if (auto_workload && sample_index < max_samples)
+        if (auto_workload && app.sample_index < max_samples)
         {
             GLuint64 start_time {};
             GLuint64 end_time {};
