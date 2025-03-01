@@ -454,7 +454,7 @@ void main()
     average_color = (average_color * sample_index + accumulated_color) / (sample_index + samples_per_frame);
     imageStore(accumulation_image, ivec2(gl_GlobalInvocationID.xy), average_color);
 #else
-    //out_color = accumulated_color / samples_per_frame;
-    out_color = vec4(vec2(pixel) / vec2(image_size), 0.0, 1.0);
+    out_color = accumulated_color / samples_per_frame;
+    //out_color = vec4(vec2(pixel) / vec2(image_size), 0.0, 1.0);
 #endif
 }

@@ -82,6 +82,7 @@ namespace
     f(PFNGLFINISHPROC, glFinish);                                              \
     f(PFNGLFLUSHPROC, glFlush);                                                \
     f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
+    f(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
     f(PFNGLGETSTRINGPROC, glGetString);
 
 // clang-format off
@@ -260,6 +261,8 @@ struct Window_state
     float scroll_offset;
 };
 
+inline constexpr unsigned int ubo_max_size {16'384};
+
 void glfw_error_callback(int error, const char *description)
 {
     std::cerr << "GLFW error " << error << ": " << description << '\n';
@@ -434,19 +437,22 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return create_program(shader.get());
 }
 
-[[nodiscard]] auto create_trace_graphics_program()
+[[nodiscard]] auto create_trace_graphics_program(const Scene &scene)
 {
     const auto vertex_shader_code = read_file("fullscreen.vert");
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
 
     const auto fragment_shader_code = read_file("trace.glsl");
-    constexpr auto header = R"(#version 430
-#define MATERIAL_COUNT 6
-#define CIRCLE_COUNT 1
-#define LINE_COUNT 1
-#define ARC_COUNT 1)";
-    const char *const sources[] {header, fragment_shader_code.c_str()};
+    std::ostringstream header;
+    header << "#version 430\n"
+           << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
+           << "#define CIRCLE_COUNT " << scene.circles.size() << '\n'
+           << "#define LINE_COUNT " << scene.lines.size() << '\n'
+           << "#define ARC_COUNT " << scene.arcs.size() << '\n';
+    const auto header_str = header.str();
+    const char *const sources[] {header_str.c_str(),
+                                 fragment_shader_code.c_str()};
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER, std::size(sources), sources);
 
@@ -618,10 +624,36 @@ template <typename T>
     glBufferData(GL_SHADER_STORAGE_BUFFER,
                  static_cast<GLsizeiptr>(data.size() * sizeof(T)),
                  data.data(),
-                 GL_DYNAMIC_READ);
+                 GL_STATIC_READ);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo.get());
 
     return ssbo;
+}
+
+template <typename T>
+[[nodiscard]] auto create_uniform_buffer(GLuint binding,
+                                         const std::vector<T> &data)
+{
+    auto ubo = create_object(glGenBuffers, glDeleteBuffers);
+
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo.get());
+
+    const auto data_size = data.size() * sizeof(T);
+    if (data_size > ubo_max_size)
+    {
+        std::ostringstream oss;
+        oss << "Uniform buffer too big (" << data_size << " > " << ubo_max_size
+            << ')';
+        throw std::runtime_error(oss.str());
+    }
+
+    glBufferData(GL_UNIFORM_BUFFER,
+                 static_cast<GLsizeiptr>(data_size),
+                 data.data(),
+                 GL_STATIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, binding, ubo.get());
+
+    return ubo;
 }
 
 [[nodiscard]] constexpr unsigned int align_up(unsigned int value,
@@ -851,12 +883,12 @@ void run()
         .arcs = {}};
 #endif
 
-#define COMPUTE_SHADER
+    // #define COMPUTE_SHADER
 
 #ifdef COMPUTE_SHADER
     const auto trace_program = create_trace_compute_program();
 #else
-    const auto trace_program = create_trace_graphics_program();
+    const auto trace_program = create_trace_graphics_program(scene);
     const auto empty_vao =
         create_object(glGenVertexArrays, glDeleteVertexArrays);
 #endif
@@ -883,6 +915,9 @@ void run()
     const auto target_texture =
         create_target_texture(texture_width, texture_height);
 
+#ifndef COMPUTE_SHADER
+    const auto float_fbo = create_framebuffer(accumulation_texture.get());
+#endif
     const auto fbo = create_framebuffer(target_texture.get());
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -893,10 +928,17 @@ void run()
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
 
+#ifdef COMPUTE_SHADER
     const auto materials_ssbo = create_storage_buffer(1, scene.materials);
     const auto circles_ssbo = create_storage_buffer(2, scene.circles);
     const auto lines_ssbo = create_storage_buffer(3, scene.lines);
     const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
+#else
+    const auto materials_ubo = create_uniform_buffer(1, scene.materials);
+    const auto circles_ubo = create_uniform_buffer(2, scene.circles);
+    const auto lines_ubo = create_uniform_buffer(3, scene.lines);
+    const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
+#endif
 
     const auto [vertices, indices] = create_vertices_indices(scene);
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
@@ -1014,7 +1056,6 @@ void run()
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-#ifdef COMPUTE_SHADER
         if (sample_index < max_samples)
         {
             const auto samples_this_frame =
@@ -1030,7 +1071,31 @@ void run()
             unsigned int num_groups_y {
                 align_up(static_cast<unsigned int>(texture_height), 16) / 16,
             };
+
+#ifdef COMPUTE_SHADER
             glDispatchCompute(num_groups_x, num_groups_y, 1);
+#else
+            glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
+            glUniform2ui(loc_image_size,
+                         static_cast<unsigned int>(texture_width),
+                         static_cast<unsigned int>(texture_height));
+            glBindVertexArray(empty_vao.get());
+
+            // new_average = alpha * sample_average + (1 - alpha) * old_average
+            const auto alpha =
+                static_cast<float>(samples_this_frame) /
+                static_cast<float>(sample_index + samples_per_frame);
+            glBlendColor(alpha, alpha, alpha, alpha);
+            glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+
+            glViewport(0, 0, texture_width, texture_height);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo.get());
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#endif
 
             sample_index += samples_this_frame;
             sum_samples += samples_this_frame;
@@ -1053,18 +1118,6 @@ void run()
                           viewport.y + viewport.height,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
-#else
-        glUseProgram(trace_program.get());
-        glUniform1ui(loc_sample_index, sample_index);
-        glUniform1ui(loc_samples_per_frame, 0);
-        glUniform2f(loc_view_position, scene.view_x, scene.view_y);
-        glUniform2f(loc_view_size, scene.view_width, scene.view_height);
-        glUniform2ui(loc_image_size,
-                     static_cast<unsigned int>(viewport.width),
-                     static_cast<unsigned int>(viewport.height));
-        glBindVertexArray(empty_vao.get());
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-#endif
 
         glUseProgram(draw_program.get());
         glUniform2f(loc_view_position_draw, scene.view_x, scene.view_y);
