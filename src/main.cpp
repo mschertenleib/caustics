@@ -851,10 +851,8 @@ void run()
 
     bool s_pressed {false};
     bool dragging {false};
-    double drag_source_mouse_x {};
-    double drag_source_mouse_y {};
-    float drag_source_view_x {};
-    float drag_source_view_y {};
+    float drag_source_mouse_x {};
+    float drag_source_mouse_y {};
 
     while (!glfwWindowShouldClose(window.get()))
     {
@@ -867,62 +865,52 @@ void run()
                               window_state.framebuffer_width,
                               window_state.framebuffer_height);
 
-        if (const auto mouse_state =
-                glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT);
-            mouse_state == GLFW_PRESS)
-        {
-            double xpos {};
-            double ypos {};
-            glfwGetCursorPos(window.get(), &xpos, &ypos);
+        double xpos {};
+        double ypos {};
+        glfwGetCursorPos(window.get(), &xpos, &ypos);
+        auto mouse_world_x =
+            screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
+                            viewport.x,
+                            viewport.width,
+                            view_x,
+                            view_width);
+        auto mouse_world_y =
+            screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
+                            viewport.y + viewport.height,
+                            -viewport.height,
+                            view_y,
+                            view_height);
 
+        if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
+            GLFW_PRESS)
+        {
             if (!dragging)
             {
                 dragging = true;
-                drag_source_mouse_x = xpos;
-                drag_source_mouse_y = ypos;
-                drag_source_view_x = view_x;
-                drag_source_view_y = view_y;
+                drag_source_mouse_x = mouse_world_x;
+                drag_source_mouse_y = mouse_world_y;
             }
             else
             {
-                // Drag vector
-                const auto drag_world_x =
-                    static_cast<float>(xpos - drag_source_mouse_x) *
-                    window_state.scale_x / static_cast<float>(viewport.width) *
-                    view_width;
-                const auto drag_world_y =
-                    static_cast<float>(ypos - drag_source_mouse_y) *
-                    window_state.scale_y /
-                    static_cast<float>(-viewport.height) * view_height;
-
-                view_x = drag_source_view_x - drag_world_x;
-                view_y = drag_source_view_y - drag_world_y;
-                sample_index = 0;
+                const auto drag_delta_x = mouse_world_x - drag_source_mouse_x;
+                const auto drag_delta_y = mouse_world_y - drag_source_mouse_y;
+                if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
+                {
+                    view_x -= drag_delta_x;
+                    view_y -= drag_delta_y;
+                    mouse_world_x = drag_source_mouse_x;
+                    mouse_world_y = drag_source_mouse_y;
+                    sample_index = 0;
+                }
             }
         }
-        else if (mouse_state == GLFW_RELEASE)
+        else
         {
             dragging = false;
         }
 
         if (window_state.scroll_offset != 0.0f)
         {
-            double xpos {};
-            double ypos {};
-            glfwGetCursorPos(window.get(), &xpos, &ypos);
-            const auto mouse_world_x =
-                screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
-                                viewport.x,
-                                viewport.width,
-                                view_x,
-                                view_width);
-            const auto mouse_world_y =
-                screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
-                                viewport.y + viewport.height,
-                                -viewport.height,
-                                view_y,
-                                view_height);
-
             constexpr float zoom_factor {1.2f};
             const auto zoom = window_state.scroll_offset > 0.0f
                                   ? 1.0f / zoom_factor
@@ -931,7 +919,6 @@ void run()
             view_y = mouse_world_y - (mouse_world_y - view_y) * zoom;
             view_width *= zoom;
             view_height *= zoom;
-
             sample_index = 0;
         }
 
