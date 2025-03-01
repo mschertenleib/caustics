@@ -1,8 +1,7 @@
-#version 430
 
+#ifdef COMPUTE_SHADER
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
-
-layout(rgba32f, binding = 0) uniform restrict image2D accumulation_image;
+#endif
 
 
 struct Material
@@ -43,16 +42,29 @@ struct Hit
 };
 
 
+#ifdef COMPUTE_SHADER
+layout(rgba32f, binding = 0) uniform restrict image2D accumulation_image;
 layout(std140, binding = 1) restrict readonly buffer Materials { Material materials[]; };
 layout(std140, binding = 2) restrict readonly buffer Circles { Circle circles[]; };
 layout(std140, binding = 3) restrict readonly buffer Lines { Line lines[]; };
 layout(std140, binding = 4) restrict readonly buffer Arcs { Arc arcs[]; };
+#else
+layout(std140, binding = 1) uniform Materials { Material materials[MATERIAL_COUNT]; };
+layout(std140, binding = 2) uniform Circles { Circle circles[CIRCLE_COUNT]; };
+layout(std140, binding = 3) uniform Lines { Line lines[LINE_COUNT]; };
+layout(std140, binding = 4) uniform Arcs { Arc arcs[ARC_COUNT]; };
+#endif
 
 
 uniform uint sample_index;
 uniform uint samples_per_frame;
 uniform vec2 view_position;
 uniform vec2 view_size;
+
+#ifndef COMPUTE_SHADER
+uniform uvec2 image_size;
+out vec4 out_color;
+#endif
 
 
 #define PI 3.1415926535897931
@@ -180,7 +192,11 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
     geometry_type = GEOMETRY_NONE;
     geometry_index = 0xffffffff;
 
+#ifdef COMPUTE_SHADER
     for (uint i = 0; i < circles.length(); ++i)
+#else
+    for (uint i = 0; i < CIRCLE_COUNT; ++i)
+#endif
     {
         if (intersect_circle(origin, direction, circles[i].center, circles[i].radius, t))
         {
@@ -188,7 +204,11 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
             geometry_index = i;
         }
     }
+#ifdef COMPUTE_SHADER
     for (uint i = 0; i < lines.length(); ++i)
+#else
+    for (uint i = 0; i < LINE_COUNT; ++i)
+#endif
     {
         if (intersect_line(origin, direction, lines[i].a, lines[i].b, t, u))
         {
@@ -196,7 +216,11 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
             geometry_index = i;
         }
     }
+#ifdef COMPUTE_SHADER
     for (uint i = 0; i < arcs.length(); ++i)
+#else
+    for (uint i = 0; i < ARC_COUNT; ++i)
+#endif
     {
         if (intersect_arc(origin, direction, arcs[i].center, arcs[i].radius, arcs[i].a, arcs[i].b, t))
         {
@@ -401,26 +425,36 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
 
 void main()
 {
+#ifdef COMPUTE_SHADER
     const uvec2 image_size = imageSize(accumulation_image);
     if (gl_GlobalInvocationID.x >= image_size.x || gl_GlobalInvocationID.y >= image_size.y)
     {
         return;
     }
+    const uvec2 pixel = gl_GlobalInvocationID.xy;
+#else
+    const uvec2 pixel = uvec2(gl_FragCoord.xy);
+#endif
 
-    const uint pixel_index = gl_GlobalInvocationID.y * image_size.x + gl_GlobalInvocationID.x;
+    const uint pixel_index = pixel.y * image_size.x + pixel.x;
     uint rng_state = hash(pixel_index) + hash(sample_index);
 
     vec4 accumulated_color = vec4(0.0);
     for (uint i = 0; i < samples_per_frame; ++i)
     {
-        const vec2 uv = (vec2(gl_GlobalInvocationID.xy) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
+        const vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
         const vec2 ray_origin = view_position + (uv - 0.5) * view_size;
         const float angle = 2.0 * PI * random(rng_state);
         const vec2 ray_direction = vec2(cos(angle), sin(angle));
         accumulated_color += vec4(radiance(ray_origin, ray_direction, rng_state), 1.0);
     }
     
+#ifdef COMPUTE_SHADER
     vec4 average_color = imageLoad(accumulation_image, ivec2(gl_GlobalInvocationID.xy));
     average_color = (average_color * sample_index + accumulated_color) / (sample_index + samples_per_frame);
     imageStore(accumulation_image, ivec2(gl_GlobalInvocationID.xy), average_color);
+#else
+    //out_color = accumulated_color / samples_per_frame;
+    out_color = vec4(vec2(pixel) / vec2(image_size), 0.0, 1.0);
+#endif
 }

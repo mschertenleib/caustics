@@ -39,6 +39,7 @@ namespace
     f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
     f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
     f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
+    f(PFNGLUNIFORM2UIPROC, glUniform2ui);                                      \
     f(PFNGLUNIFORM2FPROC, glUniform2f);                                        \
     f(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
     f(PFNGLDELETETEXTURESPROC, glDeleteTextures);                              \
@@ -225,6 +226,10 @@ struct alignas(16) Arc
 
 struct Scene
 {
+    float view_x;
+    float view_y;
+    float view_width;
+    float view_height;
     std::vector<Material> materials;
     std::vector<Circle> circles;
     std::vector<Line> lines;
@@ -358,11 +363,12 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     }
 }
 
-[[nodiscard]] auto create_shader(GLenum type, const char *code)
+[[nodiscard]] auto
+create_shader(GLenum type, std::size_t size, const char *const code[])
 {
     auto shader = create_object(glCreateShader, type, glDeleteShader);
 
-    glShaderSource(shader.get(), 1, &code, nullptr);
+    glShaderSource(shader.get(), static_cast<GLsizei>(size), code, nullptr);
     glCompileShader(shader.get());
 
     int success {};
@@ -379,6 +385,11 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     }
 
     return shader;
+}
+
+[[nodiscard]] auto create_shader(GLenum type, const char *code)
+{
+    return create_shader(type, 1, &code);
 }
 
 [[nodiscard]] auto create_program(auto &&...shaders)
@@ -404,22 +415,51 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return program;
 }
 
-[[nodiscard]] auto create_compute_program(const char *file_name)
+[[nodiscard]] auto create_trace_compute_program()
 {
-    const auto shader_code = read_file(file_name);
+    const auto shader_code = read_file("trace.glsl");
+    constexpr auto header = "#version 430\n#define COMPUTE_SHADER";
+    const char *const sources[] {header, shader_code.c_str()};
+    const auto shader =
+        create_shader(GL_COMPUTE_SHADER, std::size(sources), sources);
+
+    return create_program(shader.get());
+}
+
+[[nodiscard]] auto create_post_compute_program()
+{
+    const auto shader_code = read_file("post.comp");
     const auto shader = create_shader(GL_COMPUTE_SHADER, shader_code.c_str());
 
     return create_program(shader.get());
 }
 
-[[nodiscard]] auto create_draw_program(const char *vertex_shader_file_name,
-                                       const char *fragment_shader_file_name)
+[[nodiscard]] auto create_trace_graphics_program()
 {
-    const auto vertex_shader_code = read_file(vertex_shader_file_name);
+    const auto vertex_shader_code = read_file("fullscreen.vert");
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
 
-    const auto fragment_shader_code = read_file(fragment_shader_file_name);
+    const auto fragment_shader_code = read_file("trace.glsl");
+    constexpr auto header = R"(#version 430
+#define MATERIAL_COUNT 6
+#define CIRCLE_COUNT 1
+#define LINE_COUNT 1
+#define ARC_COUNT 1)";
+    const char *const sources[] {header, fragment_shader_code.c_str()};
+    const auto fragment_shader =
+        create_shader(GL_FRAGMENT_SHADER, std::size(sources), sources);
+
+    return create_program(vertex_shader.get(), fragment_shader.get());
+}
+
+[[nodiscard]] auto create_graphics_program()
+{
+    const auto vertex_shader_code = read_file("shader.vert");
+    const auto vertex_shader =
+        create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
+
+    const auto fragment_shader_code = read_file("shader.frag");
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER, fragment_shader_code.c_str());
 
@@ -752,15 +792,15 @@ void run()
 
     int texture_width {320};
     int texture_height {240};
-    float view_x {0.5f};
-    float view_y {view_x * static_cast<float>(texture_height) /
-                  static_cast<float>(texture_width)};
-    float view_width {1.0f};
-    float view_height {view_width * static_cast<float>(texture_height) /
-                       static_cast<float>(texture_width)};
 
 #if 1
     Scene scene {
+        .view_x = 0.5f,
+        .view_y = 0.5f * static_cast<float>(texture_height) /
+                  static_cast<float>(texture_width),
+        .view_width = 1.0f,
+        .view_height = 1.0f * static_cast<float>(texture_height) /
+                       static_cast<float>(texture_width),
         .materials =
             {Material {{0.75f, 0.75f, 0.75f},
                        {6.0f, 6.0f, 6.0f},
@@ -785,32 +825,57 @@ void run()
             Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
 #elif 0
     Scene scene {
+        .view_x = 0.5f,
+        .view_y = view_x * static_cast<float>(texture_height) /
+                  static_cast<float>(texture_width),
+        .view_width = 1.0f,
+        .view_height = view_width * static_cast<float>(texture_height) /
+                       static_cast<float>(texture_width),
         .materials = {Material {
             {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
         .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
         .lines = {},
         .arcs = {}};
 #else
-    Scene scene {.materials = {Material {{0.75f, 0.75f, 0.75f},
-                                         {6.0f, 6.0f, 6.0f},
-                                         Material_type::diffuse}},
-                 .circles = {},
-                 .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
-                 .arcs = {}};
+    Scene scene {
+        .view_x = 0.5f,
+        .view_y = view_x * static_cast<float>(texture_height) /
+                  static_cast<float>(texture_width),
+        .view_width = 1.0f,
+        .view_height = view_width * static_cast<float>(texture_height) /
+                       static_cast<float>(texture_width),
+        .materials = {Material {
+            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
+        .circles = {},
+        .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
+        .arcs = {}};
 #endif
 
-    const auto compute_program = create_compute_program("trace.comp");
+#define COMPUTE_SHADER
+
+#ifdef COMPUTE_SHADER
+    const auto trace_program = create_trace_compute_program();
+#else
+    const auto trace_program = create_trace_graphics_program();
+    const auto empty_vao =
+        create_object(glGenVertexArrays, glDeleteVertexArrays);
+#endif
 
     const auto loc_sample_index =
-        glGetUniformLocation(compute_program.get(), "sample_index");
+        glGetUniformLocation(trace_program.get(), "sample_index");
     const auto loc_samples_per_frame =
-        glGetUniformLocation(compute_program.get(), "samples_per_frame");
+        glGetUniformLocation(trace_program.get(), "samples_per_frame");
     const auto loc_view_position =
-        glGetUniformLocation(compute_program.get(), "view_position");
+        glGetUniformLocation(trace_program.get(), "view_position");
     const auto loc_view_size =
-        glGetUniformLocation(compute_program.get(), "view_size");
+        glGetUniformLocation(trace_program.get(), "view_size");
 
-    const auto post_program = create_compute_program("post.comp");
+#ifndef COMPUTE_SHADER
+    const auto loc_image_size =
+        glGetUniformLocation(trace_program.get(), "image_size");
+#endif
+
+    const auto post_program = create_post_compute_program();
 
     const auto accumulation_texture =
         create_accumulation_texture(texture_width, texture_height);
@@ -835,7 +900,7 @@ void run()
 
     const auto [vertices, indices] = create_vertices_indices(scene);
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
-    const auto draw_program = create_draw_program("shader.vert", "shader.frag");
+    const auto draw_program = create_graphics_program();
     const auto loc_view_position_draw =
         glGetUniformLocation(draw_program.get(), "view_position");
     const auto loc_view_size_draw =
@@ -872,14 +937,14 @@ void run()
             screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
                             viewport.x,
                             viewport.width,
-                            view_x,
-                            view_width);
+                            scene.view_x,
+                            scene.view_width);
         auto mouse_world_y =
             screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
                             viewport.y + viewport.height,
                             -viewport.height,
-                            view_y,
-                            view_height);
+                            scene.view_y,
+                            scene.view_height);
 
         if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
             GLFW_PRESS)
@@ -896,8 +961,8 @@ void run()
                 const auto drag_delta_y = mouse_world_y - drag_source_mouse_y;
                 if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
                 {
-                    view_x -= drag_delta_x;
-                    view_y -= drag_delta_y;
+                    scene.view_x -= drag_delta_x;
+                    scene.view_y -= drag_delta_y;
                     mouse_world_x = drag_source_mouse_x;
                     mouse_world_y = drag_source_mouse_y;
                     sample_index = 0;
@@ -915,10 +980,12 @@ void run()
             const auto zoom = window_state.scroll_offset > 0.0f
                                   ? 1.0f / zoom_factor
                                   : zoom_factor;
-            view_x = mouse_world_x - (mouse_world_x - view_x) * zoom;
-            view_y = mouse_world_y - (mouse_world_y - view_y) * zoom;
-            view_width *= zoom;
-            view_height *= zoom;
+            scene.view_x =
+                mouse_world_x - (mouse_world_x - scene.view_x) * zoom;
+            scene.view_y =
+                mouse_world_y - (mouse_world_y - scene.view_y) * zoom;
+            scene.view_width *= zoom;
+            scene.view_height *= zoom;
             sample_index = 0;
         }
 
@@ -947,15 +1014,16 @@ void run()
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
+#ifdef COMPUTE_SHADER
         if (sample_index < max_samples)
         {
             const auto samples_this_frame =
                 std::min(samples_per_frame, max_samples - sample_index);
-            glUseProgram(compute_program.get());
+            glUseProgram(trace_program.get());
             glUniform1ui(loc_sample_index, sample_index);
             glUniform1ui(loc_samples_per_frame, samples_this_frame);
-            glUniform2f(loc_view_position, view_x, view_y);
-            glUniform2f(loc_view_size, view_width, view_height);
+            glUniform2f(loc_view_position, scene.view_x, scene.view_y);
+            glUniform2f(loc_view_size, scene.view_width, scene.view_height);
             unsigned int num_groups_x {
                 align_up(static_cast<unsigned int>(texture_width), 16) / 16,
             };
@@ -963,6 +1031,7 @@ void run()
                 align_up(static_cast<unsigned int>(texture_height), 16) / 16,
             };
             glDispatchCompute(num_groups_x, num_groups_y, 1);
+
             sample_index += samples_this_frame;
             sum_samples += samples_this_frame;
 
@@ -984,10 +1053,25 @@ void run()
                           viewport.y + viewport.height,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
+#else
+        glUseProgram(trace_program.get());
+        glUniform1ui(loc_sample_index, sample_index);
+        glUniform1ui(loc_samples_per_frame, 0);
+        glUniform2f(loc_view_position, scene.view_x, scene.view_y);
+        glUniform2f(loc_view_size, scene.view_width, scene.view_height);
+        glUniform2ui(loc_image_size,
+                     static_cast<unsigned int>(viewport.width),
+                     static_cast<unsigned int>(viewport.height));
+        glBindVertexArray(empty_vao.get());
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+#endif
 
         glUseProgram(draw_program.get());
-        glUniform2f(loc_view_position_draw, view_x, view_y);
-        glUniform2f(loc_view_size_draw, view_width, view_height);
+        glUniform2f(loc_view_position_draw, scene.view_x, scene.view_y);
+        glUniform2f(loc_view_size_draw, scene.view_width, scene.view_height);
+#ifndef COMPUTE_SHADER
+        glBindVertexArray(vao.get());
+#endif
         glDrawElements(GL_TRIANGLES,
                        static_cast<GLsizei>(indices.size()),
                        GL_UNSIGNED_INT,
