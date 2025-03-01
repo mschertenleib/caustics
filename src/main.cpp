@@ -173,14 +173,6 @@ create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
     return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
 }
 
-struct Rectangle
-{
-    int x0;
-    int y0;
-    int x1;
-    int y1;
-};
-
 struct Vec2
 {
     float x;
@@ -239,6 +231,14 @@ struct Scene
     std::vector<Arc> arcs;
 };
 
+struct Viewport
+{
+    int x;
+    int y;
+    int width;
+    int height;
+};
+
 struct Vertex
 {
     Vec2 pos;
@@ -246,18 +246,51 @@ struct Vertex
     Vec3 color;
 };
 
+struct Window_state
+{
+    float scale_x;
+    float scale_y;
+    int framebuffer_width;
+    int framebuffer_height;
+    float scroll_offset;
+};
+
 void glfw_error_callback(int error, const char *description)
 {
     std::cerr << "GLFW error " << error << ": " << description << '\n';
 }
 
-double scroll_offset {}; // FIXME: this shouldn't be global, but this will be
-                         // fixed when we move everything to callbacks
-void glfw_scroll_callback([[maybe_unused]] GLFWwindow *window,
+void glfw_window_content_scale_callback(GLFWwindow *window,
+                                        float xscale,
+                                        float yscale)
+{
+    auto *const window_state =
+        static_cast<Window_state *>(glfwGetWindowUserPointer(window));
+    assert(window_state);
+
+    window_state->scale_x = xscale;
+    window_state->scale_y = yscale;
+}
+
+void glfw_framebuffer_size_callback(GLFWwindow *window, int width, int height)
+{
+    auto *const window_state =
+        static_cast<Window_state *>(glfwGetWindowUserPointer(window));
+    assert(window_state);
+
+    window_state->framebuffer_width = width;
+    window_state->framebuffer_height = height;
+}
+
+void glfw_scroll_callback(GLFWwindow *window,
                           [[maybe_unused]] double xoffset,
                           double yoffset)
 {
-    scroll_offset = yoffset;
+    auto *const window_state =
+        static_cast<Window_state *>(glfwGetWindowUserPointer(window));
+    assert(window_state);
+
+    window_state->scroll_offset = static_cast<float>(yoffset);
 }
 
 void load_gl_functions()
@@ -302,10 +335,10 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return oss.str();
 }
 
-[[nodiscard]] constexpr Rectangle centered_rectangle(int src_width,
-                                                     int src_height,
-                                                     int dst_width,
-                                                     int dst_height) noexcept
+[[nodiscard]] constexpr Viewport centered_viewport(int src_width,
+                                                   int src_height,
+                                                   int dst_width,
+                                                   int dst_height) noexcept
 {
     const auto src_aspect_ratio =
         static_cast<float>(src_width) / static_cast<float>(src_height);
@@ -315,21 +348,13 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     {
         const auto height =
             static_cast<int>(static_cast<float>(dst_width) / src_aspect_ratio);
-        const int x0 {0};
-        const int y0 {(dst_height - height) / 2};
-        const int x1 {dst_width};
-        const int y1 {y0 + height};
-        return {x0, y0, x1, y1};
+        return {0, (dst_height - height) / 2, dst_width, height};
     }
     else
     {
         const auto width =
             static_cast<int>(static_cast<float>(dst_height) * src_aspect_ratio);
-        const int x0 {(dst_width - width) / 2};
-        const int y0 {0};
-        const int x1 {x0 + width};
-        const int y1 {dst_height};
-        return {x0, y0, x1, y1};
+        return {(dst_width - width) / 2, 0, width, dst_height};
     }
 }
 
@@ -591,12 +616,12 @@ void save_as_png(const char *file_name, int width, int height)
 
 [[nodiscard]] constexpr float screen_to_world(double x,
                                               int screen_min,
-                                              int screen_max,
+                                              int screen_size,
                                               float world_center,
                                               float world_size) noexcept
 {
     const auto u = (static_cast<float>(x) - static_cast<float>(screen_min)) /
-                   static_cast<float>(screen_max - screen_min);
+                   static_cast<float>(screen_size);
     return world_center + (u - 0.5f) * world_size;
 }
 
@@ -665,6 +690,7 @@ void run()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
+
     auto window_ptr = glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
     if (window_ptr == nullptr)
     {
@@ -680,11 +706,23 @@ void run()
         window_ptr, destroy_window);
 
     glfwMakeContextCurrent(window.get());
-    glfwSwapInterval(1);
 
-    float x_scale {};
-    float y_scale {};
-    glfwGetWindowContentScale(window.get(), &x_scale, &y_scale);
+    Window_state window_state {};
+    glfwSetWindowUserPointer(window.get(), &window_state);
+
+    glfwSetWindowContentScaleCallback(window.get(),
+                                      &glfw_window_content_scale_callback);
+    glfwSetFramebufferSizeCallback(window.get(),
+                                   &glfw_framebuffer_size_callback);
+    glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
+
+    glfwGetWindowContentScale(
+        window.get(), &window_state.scale_x, &window_state.scale_y);
+    glfwGetFramebufferSize(window.get(),
+                           &window_state.framebuffer_width,
+                           &window_state.framebuffer_height);
+
+    glfwSwapInterval(1);
 
     load_gl_functions();
 
@@ -818,24 +856,17 @@ void run()
     float drag_source_view_x {};
     float drag_source_view_y {};
 
-    glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
-
     while (!glfwWindowShouldClose(window.get()))
     {
-        scroll_offset = 0.0;
+        window_state.scroll_offset = 0.0f;
         glfwPollEvents();
 
-        int framebuffer_width {};
-        int framebuffer_height {};
-        glfwGetFramebufferSize(
-            window.get(), &framebuffer_width, &framebuffer_height);
+        const auto viewport =
+            centered_viewport(texture_width,
+                              texture_height,
+                              window_state.framebuffer_width,
+                              window_state.framebuffer_height);
 
-        const auto [x0, y0, x1, y1] = centered_rectangle(texture_width,
-                                                         texture_height,
-                                                         framebuffer_width,
-                                                         framebuffer_height);
-
-        // FIXME: all of this should be done in callbacks
         if (const auto mouse_state =
                 glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT);
             mouse_state == GLFW_PRESS)
@@ -856,11 +887,13 @@ void run()
             {
                 // Drag vector
                 const auto drag_world_x =
-                    static_cast<float>(xpos - drag_source_mouse_x) * x_scale /
-                    static_cast<float>(x1 - x0) * view_width;
+                    static_cast<float>(xpos - drag_source_mouse_x) *
+                    window_state.scale_x / static_cast<float>(viewport.width) *
+                    view_width;
                 const auto drag_world_y =
-                    static_cast<float>(ypos - drag_source_mouse_y) * y_scale /
-                    static_cast<float>(y0 - y1) * view_height;
+                    static_cast<float>(ypos - drag_source_mouse_y) *
+                    window_state.scale_y /
+                    static_cast<float>(-viewport.height) * view_height;
 
                 view_x = drag_source_view_x - drag_world_x;
                 view_y = drag_source_view_y - drag_world_y;
@@ -872,21 +905,28 @@ void run()
             dragging = false;
         }
 
-        if (scroll_offset != 0.0)
+        if (window_state.scroll_offset != 0.0f)
         {
             double xpos {};
             double ypos {};
             glfwGetCursorPos(window.get(), &xpos, &ypos);
-            const auto mouse_screen_x = static_cast<float>(xpos) * x_scale;
-            const auto mouse_screen_y = static_cast<float>(ypos) * y_scale;
             const auto mouse_world_x =
-                screen_to_world(mouse_screen_x, x0, x1, view_x, view_width);
+                screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
+                                viewport.x,
+                                viewport.width,
+                                view_x,
+                                view_width);
             const auto mouse_world_y =
-                screen_to_world(mouse_screen_y, y1, y0, view_y, view_height);
+                screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
+                                viewport.y + viewport.height,
+                                -viewport.height,
+                                view_y,
+                                view_height);
 
-            constexpr float zoom_factor {1.5f};
-            const auto zoom =
-                scroll_offset > 0.0 ? 1.0f / zoom_factor : zoom_factor;
+            constexpr float zoom_factor {1.2f};
+            const auto zoom = window_state.scroll_offset > 0.0f
+                                  ? 1.0f / zoom_factor
+                                  : zoom_factor;
             view_x = mouse_world_x - (mouse_world_x - view_x) * zoom;
             view_y = mouse_world_y - (mouse_world_y - view_y) * zoom;
             view_width *= zoom;
@@ -900,12 +940,13 @@ void run()
             sample_index = 0;
         }
 
-        if (glfwGetKey(window.get(), GLFW_KEY_S) == GLFW_PRESS && !s_pressed)
+        if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
+            s_state == GLFW_PRESS && !s_pressed)
         {
             s_pressed = true;
             save_as_png("out.png", texture_width, texture_height);
         }
-        else if (glfwGetKey(window.get(), GLFW_KEY_S) == GLFW_RELEASE)
+        else if (s_state == GLFW_RELEASE)
         {
             s_pressed = false;
         }
@@ -915,7 +956,7 @@ void run()
             glQueryCounter(query_start.get(), GL_TIMESTAMP);
         }
 
-        glViewport(x0, y0, x1 - x0, y1 - y0);
+        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
@@ -950,10 +991,10 @@ void run()
                           0,
                           texture_width,
                           texture_height,
-                          x0,
-                          y0,
-                          x1,
-                          y1,
+                          viewport.x,
+                          viewport.y,
+                          viewport.x + viewport.width,
+                          viewport.y + viewport.height,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
