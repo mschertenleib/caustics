@@ -9,6 +9,7 @@ out vec4 frag_color;
 
 void main()
 {
-    const float alpha = step(0.0, cos(2.0 * PI * 10 * uv.y) + 0.5);
+    const float dist = abs(uv.x - 0.5);
+    const float alpha = smoothstep(0.5, 0.5 - fwidth(dist), dist);
     frag_color = vec4(color, alpha);
 }

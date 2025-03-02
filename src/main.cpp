@@ -476,7 +476,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
 
-    const auto fragment_shader_code = read_file("shader.frag");
+    const auto fragment_shader_code = read_file("line.frag");
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER, fragment_shader_code.c_str());
 
@@ -861,12 +861,12 @@ void run()
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     glDebugMessageCallback(&gl_debug_callback, nullptr);
 
-    const std::string renderer(
+    const std::string_view renderer(
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
     std::cout << "Renderer: \"" << renderer << "\", ";
     bool auto_workload {};
-    if (renderer.find("Mesa") != std::string::npos &&
-        renderer.find("Intel") != std::string::npos)
+    if (renderer.find("Mesa") != std::string_view::npos &&
+        renderer.find("Intel") != std::string_view::npos)
     {
         std::cout << "disabling adaptive workload\n";
         auto_workload = false;

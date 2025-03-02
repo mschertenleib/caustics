@@ -54,7 +54,7 @@ set(SHADERS
     src/trace.glsl
     src/post.comp
     src/shader.vert
-    src/shader.frag
+    src/line.frag
     src/fullscreen.vert
 )
 add_custom_target(shaders ALL DEPENDS ${SHADERS})
