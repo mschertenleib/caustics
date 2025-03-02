@@ -16,6 +16,7 @@
 #include <iostream>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -657,7 +658,7 @@ template <typename T>
 void save_as_png(const char *file_name, int width, int height)
 {
     std::cout << "Saving " << width << " x " << height << " image to \""
-              << file_name << "\"... " << std::flush;
+              << file_name << "\"\n";
 
     glFinish();
 
@@ -673,8 +674,6 @@ void save_as_png(const char *file_name, int width, int height)
         message << "Failed to write PNG image to \"" << file_name << '\"';
         throw std::runtime_error(message.str());
     }
-
-    std::cout << "Saved\n" << std::flush;
 }
 
 [[nodiscard]] constexpr float screen_to_world(double x,
@@ -792,6 +791,133 @@ void save_as_png(const char *file_name, int width, int height)
 #endif
 
     return scene;
+}
+
+[[nodiscard]] std::optional<Scene> load_scene(const char *file_name)
+{
+    std::cout << "Loading scene from \"" << file_name << "\"\n";
+
+    std::ifstream file(file_name);
+    if (!file.is_open())
+    {
+        std::cerr << "Failed to read scene file \"" << file_name << '\"';
+        return std::nullopt;
+    }
+
+    Scene scene {};
+
+    // FIXME: this is just a test, we need an actual parser that is more
+    // intelligent (like handling newlines between key and value, as well as
+    // nested keys)
+
+    std::string line;
+    while (std::getline(std::ws(file), line))
+    {
+        constexpr auto sep = ": \t";
+        const auto key_end = line.find_first_of(sep);
+        const auto key = line.substr(0, key_end);
+        if (key_end == std::string::npos)
+        {
+            continue;
+        }
+        const auto value_start = line.find_first_not_of(sep, key_end);
+        if (value_start == std::string::npos)
+        {
+            continue;
+        }
+        const auto value = line.substr(value_start);
+        if (key == "view_x")
+        {
+            scene.view_x = std::stof(value);
+        }
+        else if (key == "view_y")
+        {
+            scene.view_y = std::stof(value);
+        }
+        else if (key == "view_width")
+        {
+            scene.view_width = std::stof(value);
+        }
+        else if (key == "view_height")
+        {
+            scene.view_height = std::stof(value);
+        }
+    }
+
+    return scene;
+}
+
+void save_scene(const Scene &scene, const char *file_name)
+{
+    std::cout << "Saving scene to \"" << file_name << "\"\n";
+
+    std::ofstream file(file_name);
+    if (!file.is_open())
+    {
+        std::ostringstream message;
+        message << "Failed to write to scene file \"" << file_name << '\"';
+        throw std::runtime_error(message.str());
+    }
+
+    file.precision(std::numeric_limits<float>::max_digits10);
+
+    file << "view_x: " << scene.view_x << '\n';
+    file << "view_y: " << scene.view_y << '\n';
+    file << "view_width: " << scene.view_width << '\n';
+    file << "view_height: " << scene.view_height << '\n';
+
+    const auto write_vec2 = [&file](const auto &prefix, const vec2 &v)
+    {
+        file << prefix << "x: " << v.x << '\n';
+        file << prefix << "y: " << v.y << '\n';
+    };
+    const auto write_color = [&file](const auto &prefix, const vec3 &v)
+    {
+        file << prefix << "r: " << v.x << '\n';
+        file << prefix << "g: " << v.y << '\n';
+        file << prefix << "b: " << v.z << '\n';
+    };
+
+    file << "materials:" << (scene.materials.empty() ? " []\n" : "\n");
+    for (const auto &material : scene.materials)
+    {
+        file << "  - color:\n";
+        write_color("        ", material.color);
+        file << "    emissivity:\n";
+        write_color("        ", material.emissivity);
+        file << "    type: " << static_cast<int>(material.type) << '\n';
+    }
+
+    file << "circles:" << (scene.circles.empty() ? " []\n" : "\n");
+    for (const auto &circle : scene.circles)
+    {
+        file << "  - center:\n";
+        write_vec2("        ", circle.center);
+        file << "    radius: " << circle.radius << '\n';
+        file << "    material_id: " << circle.material_id << '\n';
+    }
+
+    file << "lines:" << (scene.lines.empty() ? " []\n" : "\n");
+    for (const auto &line : scene.lines)
+    {
+        file << "  - a:\n";
+        write_vec2("        ", line.a);
+        file << "    b:\n";
+        write_vec2("        ", line.b);
+        file << "    material_id: " << line.material_id << '\n';
+    }
+
+    file << "arcs:" << (scene.arcs.empty() ? " []\n" : "\n");
+    for (const auto &arc : scene.arcs)
+    {
+        file << "  - center:\n";
+        write_vec2("        ", arc.center);
+        file << "    radius: " << arc.radius << '\n';
+        file << "    a:\n";
+        write_vec2("        ", arc.a);
+        file << "    b: " << arc.b << '\n';
+        file << "    material_id: " << arc.material_id << '\n';
+    }
 }
 
 void run()
@@ -936,7 +1062,9 @@ void run()
     unsigned int sum_samples {0};
     int num_frames {0};
 
+    bool p_pressed {false};
     bool s_pressed {false};
+    bool l_pressed {false};
     bool dragging {false};
     float drag_source_mouse_x {};
     float drag_source_mouse_y {};
@@ -1016,15 +1144,43 @@ void run()
             sample_index = 0;
         }
 
+        if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
+            p_state == GLFW_PRESS && !p_pressed)
+        {
+            p_pressed = true;
+            save_as_png("image.png", texture_width, texture_height);
+        }
+        else if (p_state == GLFW_RELEASE)
+        {
+            p_pressed = false;
+        }
+
         if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
             s_state == GLFW_PRESS && !s_pressed)
         {
             s_pressed = true;
-            save_as_png("out.png", texture_width, texture_height);
+            save_scene(scene, "scene.yaml");
         }
         else if (s_state == GLFW_RELEASE)
         {
             s_pressed = false;
+        }
+
+        if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
+            l_state == GLFW_PRESS && !l_pressed)
+        {
+            l_pressed = true;
+            const auto new_scene = load_scene("scene.yaml");
+            std::cerr << "Scene loading is not yet supported as it requires "
+                         "recreating some resources\n";
+            if (new_scene.has_value())
+            {
+                save_scene(new_scene.value(), "new_scene.yaml");
+            }
+        }
+        else if (l_state == GLFW_RELEASE)
+        {
+            l_pressed = false;
         }
 
         if (auto_workload)
