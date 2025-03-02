@@ -247,8 +247,8 @@ struct Viewport
 
 struct Vertex
 {
-    Vec2 pos;
-    Vec2 uv;
+    Vec2 position;
+    Vec3 uvw;
     Vec3 color;
 };
 
@@ -605,13 +605,13 @@ create_vertex_index_buffers(const std::vector<Vertex> &vertices,
                           GL_FLOAT,
                           GL_FALSE,
                           sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, pos)));
+                          reinterpret_cast<void *>(offsetof(Vertex, position)));
     glVertexAttribPointer(1,
-                          2,
+                          3,
                           GL_FLOAT,
                           GL_FALSE,
                           sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, uv)));
+                          reinterpret_cast<void *>(offsetof(Vertex, uvw)));
     glVertexAttribPointer(2,
                           3,
                           GL_FLOAT,
@@ -694,13 +694,6 @@ void save_as_png(const char *file_name, int width, int height)
 
 [[nodiscard]] auto create_vertices_indices(const Scene &scene)
 {
-    /*std::vector<Vertex> vertices {
-        Vertex {{0.3f, 0.2f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-        Vertex {{0.6f, 0.3f}, {1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-        Vertex {{0.5f, 0.5f}, {1.0f, 1.0f}, {0.0f, 0.0, 1.0f}},
-        Vertex {{0.25f, 0.45f}, {0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}}};
-    std::vector<std::uint32_t> indices {0, 1, 2, 0, 2, 3};*/
-
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
 
@@ -713,27 +706,34 @@ void save_as_png(const char *file_name, int width, int height)
     { return Vec2 {u.x - v.x, u.y - v.y}; };
     const auto mul = [](const Vec2 &v, float f)
     { return Vec2 {v.x * f, v.y * f}; };
-    const auto normalize = [](const Vec2 &v)
-    {
-        const auto inv_norm = 1.0f / std::sqrt(v.x * v.x + v.y * v.y);
-        return Vec2 {v.x * inv_norm, v.y * inv_norm};
-    };
+    const auto div = [](const Vec2 &v, float f)
+    { return Vec2 {v.x / f, v.y / f}; };
+    const auto norm = [](const Vec2 &v)
+    { return std::sqrt(v.x * v.x + v.y * v.y); };
 
     for (const auto &line : scene.lines)
     {
         const auto line_vec = sub(line.b, line.a);
-        const auto left =
-            mul(normalize(Vec2 {-line_vec.y, line_vec.x}), thickness);
-        const auto start_left = add(line.a, left);
-        const auto start_right = sub(line.a, left);
-        const auto end_right = sub(line.b, left);
-        const auto end_left = add(line.b, left);
+        const auto line_length = norm(line_vec);
+        const auto line_dir = div(line_vec, line_length);
+        const auto delta_left =
+            mul(Vec2 {-line_dir.y, line_dir.x}, thickness * 0.5f);
+        const auto delta_up = mul(line_dir, thickness * 0.5f);
+        const auto start_left = sub(add(line.a, delta_left), delta_up);
+        const auto start_right = sub(sub(line.a, delta_left), delta_up);
+        const auto end_left = add(add(line.b, delta_left), delta_up);
+        const auto end_right = add(sub(line.b, delta_left), delta_up);
+        const auto aspect_ratio = line_length / thickness;
         const auto color = scene.materials[line.material_id].color;
         const auto first_index = static_cast<std::uint32_t>(vertices.size());
-        vertices.push_back({start_left, {0.0f, 0.0f}, color});
-        vertices.push_back({start_right, {1.0f, 0.0f}, color});
-        vertices.push_back({end_right, {1.0f, 1.0f}, color});
-        vertices.push_back({end_left, {0.0f, 1.0f}, color});
+        vertices.push_back(
+            {start_left, {-0.5f, 0.5f, -aspect_ratio - 0.5f}, color});
+        vertices.push_back(
+            {start_right, {0.5f, 0.5f, -aspect_ratio - 0.5f}, color});
+        vertices.push_back(
+            {end_right, {0.5f, -aspect_ratio - 0.5f, 0.5f}, color});
+        vertices.push_back(
+            {end_left, {-0.5f, -aspect_ratio - 0.5f, 0.5f}, color});
         indices.push_back(first_index + 0);
         indices.push_back(first_index + 1);
         indices.push_back(first_index + 2);
