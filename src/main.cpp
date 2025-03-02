@@ -1,3 +1,5 @@
+#include "vec2.hpp"
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
@@ -175,13 +177,7 @@ create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
     return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
 }
 
-struct Vec2
-{
-    float x;
-    float y;
-};
-
-struct Vec3
+struct vec3
 {
     float x;
     float y;
@@ -197,30 +193,30 @@ enum struct Material_type : std::uint32_t
 
 struct alignas(16) Material
 {
-    alignas(16) Vec3 color;
-    alignas(16) Vec3 emissivity;
+    alignas(16) vec3 color;
+    alignas(16) vec3 emissivity;
     Material_type type;
 };
 
 struct alignas(16) Circle
 {
-    alignas(8) Vec2 center;
+    alignas(8) vec2 center;
     float radius;
     std::uint32_t material_id;
 };
 
 struct alignas(16) Line
 {
-    alignas(8) Vec2 a;
-    alignas(8) Vec2 b;
+    alignas(8) vec2 a;
+    alignas(8) vec2 b;
     std::uint32_t material_id;
 };
 
 struct alignas(16) Arc
 {
-    alignas(8) Vec2 center;
+    alignas(8) vec2 center;
     float radius;
-    alignas(8) Vec2 a;
+    alignas(8) vec2 a;
     float b;
     std::uint32_t material_id;
 };
@@ -247,9 +243,9 @@ struct Viewport
 
 struct Vertex
 {
-    Vec2 position;
-    Vec3 uvw;
-    Vec3 color;
+    vec2 position;
+    vec3 uvw;
+    vec3 color;
 };
 
 struct Window_state
@@ -699,31 +695,20 @@ void save_as_png(const char *file_name, int width, int height)
 
     const float thickness {0.005f};
 
-    // FIXME: this is temporary
-    const auto add = [](const Vec2 &u, const Vec2 &v)
-    { return Vec2 {u.x + v.x, u.y + v.y}; };
-    const auto sub = [](const Vec2 &u, const Vec2 &v)
-    { return Vec2 {u.x - v.x, u.y - v.y}; };
-    const auto mul = [](const Vec2 &v, float f)
-    { return Vec2 {v.x * f, v.y * f}; };
-    const auto div = [](const Vec2 &v, float f)
-    { return Vec2 {v.x / f, v.y / f}; };
-    const auto norm = [](const Vec2 &v)
-    { return std::sqrt(v.x * v.x + v.y * v.y); };
-
     for (const auto &line : scene.lines)
     {
-        const auto line_vec = sub(line.b, line.a);
+        const auto line_vec = line.b - line.a;
         const auto line_length = norm(line_vec);
-        const auto line_dir = div(line_vec, line_length);
+        const auto line_dir = line_vec * (1.0f / line_length);
         const auto delta_left =
-            mul(Vec2 {-line_dir.y, line_dir.x}, thickness * 0.5f);
-        const auto delta_up = mul(line_dir, thickness * 0.5f);
-        const auto start_left = sub(add(line.a, delta_left), delta_up);
-        const auto start_right = sub(sub(line.a, delta_left), delta_up);
-        const auto end_left = add(add(line.b, delta_left), delta_up);
-        const auto end_right = add(sub(line.b, delta_left), delta_up);
+            vec2 {-line_dir.y, line_dir.x} * (thickness * 0.5f);
+        const auto delta_up = line_dir * (thickness * 0.5f);
+        const auto start_left = line.a + delta_left - delta_up;
+        const auto start_right = line.a - delta_left - delta_up;
+        const auto end_left = line.b + delta_left + delta_up;
+        const auto end_right = line.b - delta_left + delta_up;
         const auto aspect_ratio = line_length / thickness;
+
         const auto color = scene.materials[line.material_id].color;
         const auto first_index = static_cast<std::uint32_t>(vertices.size());
         vertices.push_back(
