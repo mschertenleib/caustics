@@ -44,16 +44,11 @@ struct Hit
 
 #ifdef COMPUTE_SHADER
 layout(rgba32f, binding = 0) uniform restrict image2D accumulation_image;
-layout(std140, binding = 1) restrict readonly buffer Materials { Material materials[]; };
-layout(std140, binding = 2) restrict readonly buffer Circles { Circle circles[]; };
-layout(std140, binding = 3) restrict readonly buffer Lines { Line lines[]; };
-layout(std140, binding = 4) restrict readonly buffer Arcs { Arc arcs[]; };
-#else
+#endif
 layout(std140, binding = 1) uniform Materials { Material materials[MATERIAL_COUNT]; };
 layout(std140, binding = 2) uniform Circles { Circle circles[CIRCLE_COUNT]; };
 layout(std140, binding = 3) uniform Lines { Line lines[LINE_COUNT]; };
 layout(std140, binding = 4) uniform Arcs { Arc arcs[ARC_COUNT]; };
-#endif
 
 
 uniform uint sample_index;
@@ -192,11 +187,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
     geometry_type = GEOMETRY_NONE;
     geometry_index = 0xffffffff;
 
-#ifdef COMPUTE_SHADER
-    for (uint i = 0; i < circles.length(); ++i)
-#else
     for (uint i = 0; i < CIRCLE_COUNT; ++i)
-#endif
     {
         if (intersect_circle(origin, direction, circles[i].center, circles[i].radius, t))
         {
@@ -204,11 +195,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
             geometry_index = i;
         }
     }
-#ifdef COMPUTE_SHADER
-    for (uint i = 0; i < lines.length(); ++i)
-#else
     for (uint i = 0; i < LINE_COUNT; ++i)
-#endif
     {
         if (intersect_line(origin, direction, lines[i].a, lines[i].b, t, u))
         {
@@ -216,11 +203,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out uint g
             geometry_index = i;
         }
     }
-#ifdef COMPUTE_SHADER
-    for (uint i = 0; i < arcs.length(); ++i)
-#else
     for (uint i = 0; i < ARC_COUNT; ++i)
-#endif
     {
         if (intersect_arc(origin, direction, arcs[i].center, arcs[i].radius, arcs[i].a, arcs[i].b, t))
         {
@@ -455,6 +438,5 @@ void main()
     imageStore(accumulation_image, ivec2(gl_GlobalInvocationID.xy), average_color);
 #else
     out_color = accumulated_color / samples_per_frame;
-    //out_color = vec4(vec2(pixel) / vec2(image_size), 0.0, 1.0);
 #endif
 }

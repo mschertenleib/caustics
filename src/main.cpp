@@ -261,7 +261,11 @@ struct Window_state
     float scroll_offset;
 };
 
-inline constexpr unsigned int ubo_max_size {16'384};
+constexpr unsigned int max_ubo_size {16'384};
+constexpr unsigned int max_material_count {max_ubo_size / sizeof(Material)};
+constexpr unsigned int max_circle_count {max_ubo_size / sizeof(Circle)};
+constexpr unsigned int max_line_count {max_ubo_size / sizeof(Line)};
+constexpr unsigned int max_arc_count {max_ubo_size / sizeof(Arc)};
 
 void glfw_error_callback(int error, const char *description)
 {
@@ -418,11 +422,18 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return program;
 }
 
-[[nodiscard]] auto create_trace_compute_program()
+[[nodiscard]] auto create_trace_compute_program(const Scene &scene)
 {
     const auto shader_code = read_file("trace.glsl");
-    constexpr auto header = "#version 430\n#define COMPUTE_SHADER";
-    const char *const sources[] {header, shader_code.c_str()};
+    std::ostringstream header;
+    header << "#version 430\n"
+           << "#define COMPUTE_SHADER\n"
+           << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
+           << "#define CIRCLE_COUNT " << scene.circles.size() << '\n'
+           << "#define LINE_COUNT " << scene.lines.size() << '\n'
+           << "#define ARC_COUNT " << scene.arcs.size() << '\n';
+    const auto header_str = header.str();
+    const char *const sources[] {header_str.c_str(), shader_code.c_str()};
     const auto shader =
         create_shader(GL_COMPUTE_SHADER, std::size(sources), sources);
 
@@ -615,22 +626,6 @@ create_vertex_index_buffers(const std::vector<Vertex> &vertices,
 }
 
 template <typename T>
-[[nodiscard]] auto create_storage_buffer(GLuint binding,
-                                         const std::vector<T> &data)
-{
-    auto ssbo = create_object(glGenBuffers, glDeleteBuffers);
-
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo.get());
-    glBufferData(GL_SHADER_STORAGE_BUFFER,
-                 static_cast<GLsizeiptr>(data.size() * sizeof(T)),
-                 data.data(),
-                 GL_STATIC_READ);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, ssbo.get());
-
-    return ssbo;
-}
-
-template <typename T>
 [[nodiscard]] auto create_uniform_buffer(GLuint binding,
                                          const std::vector<T> &data)
 {
@@ -639,10 +634,10 @@ template <typename T>
     glBindBuffer(GL_UNIFORM_BUFFER, ubo.get());
 
     const auto data_size = data.size() * sizeof(T);
-    if (data_size > ubo_max_size)
+    if (data_size > max_ubo_size)
     {
         std::ostringstream oss;
-        oss << "Uniform buffer too big (" << data_size << " > " << ubo_max_size
+        oss << "Uniform buffer too big (" << data_size << " > " << max_ubo_size
             << ')';
         throw std::runtime_error(oss.str());
     }
@@ -750,6 +745,70 @@ void save_as_png(const char *file_name, int width, int height)
     return std::pair {vertices, indices};
 }
 
+[[nodiscard]] Scene create_scene(int texture_width, int texture_height)
+{
+    const auto view_x = 0.5f;
+    const auto view_y = 0.5f * static_cast<float>(texture_height) /
+                        static_cast<float>(texture_width);
+    const auto view_width = 1.0f;
+    const auto view_height = 1.0f * static_cast<float>(texture_height) /
+                             static_cast<float>(texture_width);
+
+#if 1
+    Scene scene {
+        .view_x = view_x,
+        .view_y = view_y,
+        .view_width = view_width,
+        .view_height = view_height,
+        .materials =
+            {Material {{0.75f, 0.75f, 0.75f},
+                       {6.0f, 6.0f, 6.0f},
+                       Material_type::diffuse},
+             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
+             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
+             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
+             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
+             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
+        .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
+                    Circle {{0.5f, 0.3f}, 0.15f, 1},
+                    Circle {{0.8f, 0.2f}, 0.05f, 2}},
+        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
+                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
+        .arcs = {
+            Arc {{0.6f, 0.6f},
+                 0.1f,
+                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
+                 -0.04f,
+                 3},
+            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
+            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
+#elif 0
+    Scene scene {
+        .view_x = view_x,
+        .view_y = view_y,
+        .view_width = view_width,
+        .view_height = view_height,
+        .materials = {Material {
+            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
+        .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
+        .lines = {},
+        .arcs = {}};
+#else
+    Scene scene {.view_x = view_x,
+                 .view_y = view_y,
+                 .view_width = view_width,
+                 .view_height = view_height,
+                 .materials = {Material {{0.75f, 0.75f, 0.75f},
+                                         {6.0f, 6.0f, 6.0f},
+                                         Material_type::diffuse}},
+                 .circles = {},
+                 .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
+                 .arcs = {}};
+#endif
+
+    return scene;
+}
+
 void run()
 {
     glfwSetErrorCallback(&glfw_error_callback);
@@ -824,69 +883,12 @@ void run()
 
     int texture_width {320};
     int texture_height {240};
+    auto scene = create_scene(texture_width, texture_height);
 
-#if 1
-    Scene scene {
-        .view_x = 0.5f,
-        .view_y = 0.5f * static_cast<float>(texture_height) /
-                  static_cast<float>(texture_width),
-        .view_width = 1.0f,
-        .view_height = 1.0f * static_cast<float>(texture_height) /
-                       static_cast<float>(texture_width),
-        .materials =
-            {Material {{0.75f, 0.75f, 0.75f},
-                       {6.0f, 6.0f, 6.0f},
-                       Material_type::diffuse},
-             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
-             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
-             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
-             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
-             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
-        .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
-                    Circle {{0.5f, 0.3f}, 0.15f, 1},
-                    Circle {{0.8f, 0.2f}, 0.05f, 2}},
-        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
-                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
-        .arcs = {
-            Arc {{0.6f, 0.6f},
-                 0.1f,
-                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
-                 -0.04f,
-                 3},
-            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
-            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
-#elif 0
-    Scene scene {
-        .view_x = 0.5f,
-        .view_y = view_x * static_cast<float>(texture_height) /
-                  static_cast<float>(texture_width),
-        .view_width = 1.0f,
-        .view_height = view_width * static_cast<float>(texture_height) /
-                       static_cast<float>(texture_width),
-        .materials = {Material {
-            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
-        .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
-        .lines = {},
-        .arcs = {}};
-#else
-    Scene scene {
-        .view_x = 0.5f,
-        .view_y = view_x * static_cast<float>(texture_height) /
-                  static_cast<float>(texture_width),
-        .view_width = 1.0f,
-        .view_height = view_width * static_cast<float>(texture_height) /
-                       static_cast<float>(texture_width),
-        .materials = {Material {
-            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
-        .circles = {},
-        .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
-        .arcs = {}};
-#endif
-
-    // #define COMPUTE_SHADER
+#define COMPUTE_SHADER
 
 #ifdef COMPUTE_SHADER
-    const auto trace_program = create_trace_compute_program();
+    const auto trace_program = create_trace_compute_program(scene);
 #else
     const auto trace_program = create_trace_graphics_program(scene);
     const auto empty_vao =
@@ -928,17 +930,10 @@ void run()
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
 
-#ifdef COMPUTE_SHADER
-    const auto materials_ssbo = create_storage_buffer(1, scene.materials);
-    const auto circles_ssbo = create_storage_buffer(2, scene.circles);
-    const auto lines_ssbo = create_storage_buffer(3, scene.lines);
-    const auto arcs_ssbo = create_storage_buffer(4, scene.arcs);
-#else
     const auto materials_ubo = create_uniform_buffer(1, scene.materials);
     const auto circles_ubo = create_uniform_buffer(2, scene.circles);
     const auto lines_ubo = create_uniform_buffer(3, scene.lines);
     const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
-#endif
 
     const auto [vertices, indices] = create_vertices_indices(scene);
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
