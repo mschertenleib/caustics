@@ -43,6 +43,7 @@ namespace
     f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
     f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
     f(PFNGLUNIFORM2UIPROC, glUniform2ui);                                      \
+    f(PFNGLUNIFORM1FPROC, glUniform1f);                                        \
     f(PFNGLUNIFORM2FPROC, glUniform2f);                                        \
     f(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
     f(PFNGLDELETETEXTURESPROC, glDeleteTextures);                              \
@@ -234,19 +235,33 @@ struct Scene
     std::vector<Arc> arcs;
 };
 
+struct Vertex
+{
+    vec2 position;
+    vec3 local;
+    vec3 color;
+};
+
+struct Scene_raster_geometry
+{
+    float thickness;
+    // TODO: merge these
+    std::vector<Vertex> material_vertices;
+    std::vector<std::uint32_t> material_indices;
+    std::vector<Vertex> circle_vertices;
+    std::vector<std::uint32_t> circle_indices;
+    std::vector<Vertex> line_vertices;
+    std::vector<std::uint32_t> line_indices;
+    std::vector<Vertex> arc_vertices;
+    std::vector<std::uint32_t> arc_indices;
+};
+
 struct Viewport
 {
     int x;
     int y;
     int width;
     int height;
-};
-
-struct Vertex
-{
-    vec2 position;
-    vec3 uvw;
-    vec3 color;
 };
 
 struct Window_state
@@ -467,13 +482,15 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return create_program(vertex_shader.get(), fragment_shader.get());
 }
 
-[[nodiscard]] auto create_graphics_program()
+[[nodiscard]] auto
+create_graphics_program(const char *vertex_shader_file_name,
+                        const char *fragment_shader_file_name)
 {
-    const auto vertex_shader_code = read_file("shader.vert");
+    const auto vertex_shader_code = read_file(vertex_shader_file_name);
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
 
-    const auto fragment_shader_code = read_file("line.frag");
+    const auto fragment_shader_code = read_file(fragment_shader_file_name);
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER, fragment_shader_code.c_str());
 
@@ -598,19 +615,19 @@ create_vertex_index_buffers(const std::vector<Vertex> &vertices,
                  GL_STATIC_DRAW);
 
     glVertexAttribPointer(0,
-                          2,
+                          sizeof(Vertex::position) / sizeof(float),
                           GL_FLOAT,
                           GL_FALSE,
                           sizeof(Vertex),
                           reinterpret_cast<void *>(offsetof(Vertex, position)));
     glVertexAttribPointer(1,
-                          3,
+                          sizeof(Vertex::local) / sizeof(float),
                           GL_FLOAT,
                           GL_FALSE,
                           sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, uvw)));
+                          reinterpret_cast<void *>(offsetof(Vertex, local)));
     glVertexAttribPointer(2,
-                          3,
+                          sizeof(Vertex::color) / sizeof(float),
                           GL_FLOAT,
                           GL_FALSE,
                           sizeof(Vertex),
@@ -687,12 +704,38 @@ void save_as_png(const char *file_name, int width, int height)
     return world_center + (u - 0.5f) * world_size;
 }
 
-[[nodiscard]] auto create_vertices_indices(const Scene &scene)
+[[nodiscard]] Scene_raster_geometry create_raster_geometry(const Scene &scene)
 {
-    std::vector<Vertex> vertices;
-    std::vector<std::uint32_t> indices;
+    Scene_raster_geometry geometry {};
+    geometry.thickness = 0.005f;
 
-    const float thickness {0.005f};
+    for (const auto &circle : scene.circles)
+    {
+        const auto half_side = circle.radius + 0.5f * geometry.thickness;
+        const auto bottom_left = circle.center + vec2 {-half_side, -half_side};
+        const auto bottom_right = circle.center + vec2 {half_side, -half_side};
+        const auto top_right = circle.center + vec2 {half_side, half_side};
+        const auto top_left = circle.center + vec2 {-half_side, half_side};
+        const auto rel_thickness = geometry.thickness / circle.radius;
+
+        const auto color = scene.materials[circle.material_id].color;
+        const auto first_index =
+            static_cast<std::uint32_t>(geometry.circle_vertices.size());
+        geometry.circle_vertices.push_back(
+            {bottom_left, {-1.0, -1.0f, rel_thickness}, color});
+        geometry.circle_vertices.push_back(
+            {bottom_right, {1.0f, -1.0f, rel_thickness}, color});
+        geometry.circle_vertices.push_back(
+            {top_right, {1.0f, 1.0f, rel_thickness}, color});
+        geometry.circle_vertices.push_back(
+            {top_left, {-1.0f, 1.0f, rel_thickness}, color});
+        geometry.circle_indices.push_back(first_index + 0);
+        geometry.circle_indices.push_back(first_index + 1);
+        geometry.circle_indices.push_back(first_index + 2);
+        geometry.circle_indices.push_back(first_index + 0);
+        geometry.circle_indices.push_back(first_index + 2);
+        geometry.circle_indices.push_back(first_index + 3);
+    }
 
     for (const auto &line : scene.lines)
     {
@@ -700,33 +743,34 @@ void save_as_png(const char *file_name, int width, int height)
         const auto line_length = norm(line_vec);
         const auto line_dir = line_vec * (1.0f / line_length);
         const auto delta_left =
-            vec2 {-line_dir.y, line_dir.x} * (thickness * 0.5f);
-        const auto delta_up = line_dir * (thickness * 0.5f);
+            vec2 {-line_dir.y, line_dir.x} * (geometry.thickness * 0.5f);
+        const auto delta_up = line_dir * (geometry.thickness * 0.5f);
         const auto start_left = line.a + delta_left - delta_up;
         const auto start_right = line.a - delta_left - delta_up;
         const auto end_left = line.b + delta_left + delta_up;
         const auto end_right = line.b - delta_left + delta_up;
-        const auto aspect_ratio = line_length / thickness;
+        const auto aspect_ratio = line_length / geometry.thickness;
 
         const auto color = scene.materials[line.material_id].color;
-        const auto first_index = static_cast<std::uint32_t>(vertices.size());
-        vertices.push_back(
+        const auto first_index =
+            static_cast<std::uint32_t>(geometry.line_vertices.size());
+        geometry.line_vertices.push_back(
             {start_left, {-0.5f, 0.5f, -aspect_ratio - 0.5f}, color});
-        vertices.push_back(
+        geometry.line_vertices.push_back(
             {start_right, {0.5f, 0.5f, -aspect_ratio - 0.5f}, color});
-        vertices.push_back(
+        geometry.line_vertices.push_back(
             {end_right, {0.5f, -aspect_ratio - 0.5f, 0.5f}, color});
-        vertices.push_back(
+        geometry.line_vertices.push_back(
             {end_left, {-0.5f, -aspect_ratio - 0.5f, 0.5f}, color});
-        indices.push_back(first_index + 0);
-        indices.push_back(first_index + 1);
-        indices.push_back(first_index + 2);
-        indices.push_back(first_index + 0);
-        indices.push_back(first_index + 2);
-        indices.push_back(first_index + 3);
+        geometry.line_indices.push_back(first_index + 0);
+        geometry.line_indices.push_back(first_index + 1);
+        geometry.line_indices.push_back(first_index + 2);
+        geometry.line_indices.push_back(first_index + 0);
+        geometry.line_indices.push_back(first_index + 2);
+        geometry.line_indices.push_back(first_index + 3);
     }
 
-    return std::pair {vertices, indices};
+    return geometry;
 }
 
 [[nodiscard]] Scene create_scene(int texture_width, int texture_height)
@@ -996,7 +1040,7 @@ void run()
     int texture_height {240};
     auto scene = create_scene(texture_width, texture_height);
 
-#define COMPUTE_SHADER
+    // #define COMPUTE_SHADER
 
 #ifdef COMPUTE_SHADER
     const auto trace_program = create_trace_compute_program(scene);
@@ -1046,13 +1090,24 @@ void run()
     const auto lines_ubo = create_uniform_buffer(3, scene.lines);
     const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
 
-    const auto [vertices, indices] = create_vertices_indices(scene);
-    const auto [vao, vbo, ibo] = create_vertex_index_buffers(vertices, indices);
-    const auto draw_program = create_graphics_program();
-    const auto loc_view_position_draw =
-        glGetUniformLocation(draw_program.get(), "view_position");
-    const auto loc_view_size_draw =
-        glGetUniformLocation(draw_program.get(), "view_size");
+    const auto raster_geometry = create_raster_geometry(scene);
+    const auto [line_vao, line_vbo, line_ibo] = create_vertex_index_buffers(
+        raster_geometry.line_vertices, raster_geometry.line_indices);
+    const auto [circle_vao, circle_vbo, circle_ibo] =
+        create_vertex_index_buffers(raster_geometry.circle_vertices,
+                                    raster_geometry.circle_indices);
+    const auto line_program =
+        create_graphics_program("shader.vert", "line.frag");
+    const auto circle_program =
+        create_graphics_program("shader.vert", "circle.frag");
+    const auto loc_view_position_draw_line =
+        glGetUniformLocation(line_program.get(), "view_position");
+    const auto loc_view_size_draw_line =
+        glGetUniformLocation(line_program.get(), "view_size");
+    const auto loc_view_position_draw_circle =
+        glGetUniformLocation(circle_program.get(), "view_position");
+    const auto loc_view_size_draw_circle =
+        glGetUniformLocation(circle_program.get(), "view_size");
 
     constexpr unsigned int max_samples {200'000};
     unsigned int sample_index {0};
@@ -1255,16 +1310,36 @@ void run()
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
-        glUseProgram(draw_program.get());
-        glUniform2f(loc_view_position_draw, scene.view_x, scene.view_y);
-        glUniform2f(loc_view_size_draw, scene.view_width, scene.view_height);
+        {
+            glUseProgram(line_program.get());
+            glUniform2f(
+                loc_view_position_draw_line, scene.view_x, scene.view_y);
+            glUniform2f(
+                loc_view_size_draw_line, scene.view_width, scene.view_height);
 #ifndef COMPUTE_SHADER
-        glBindVertexArray(vao.get());
+            glBindVertexArray(line_vao.get());
 #endif
-        glDrawElements(GL_TRIANGLES,
-                       static_cast<GLsizei>(indices.size()),
-                       GL_UNSIGNED_INT,
-                       nullptr);
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(raster_geometry.line_indices.size()),
+                GL_UNSIGNED_INT,
+                nullptr);
+        }
+        {
+            glUseProgram(circle_program.get());
+            glUniform2f(
+                loc_view_position_draw_circle, scene.view_x, scene.view_y);
+            glUniform2f(
+                loc_view_size_draw_circle, scene.view_width, scene.view_height);
+#ifndef COMPUTE_SHADER
+            glBindVertexArray(circle_vao.get());
+#endif
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(raster_geometry.circle_indices.size()),
+                GL_UNSIGNED_INT,
+                nullptr);
+        }
 
         if (auto_workload)
         {

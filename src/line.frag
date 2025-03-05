@@ -1,6 +1,6 @@
 #version 430
 
-in vec3 uvw;
+in vec3 local;
 in vec3 color;
 
 out vec4 frag_color;
@@ -9,10 +9,10 @@ out vec4 frag_color;
 
 void main()
 {
-    float dist = abs(uvw.x);
-    if (uvw.y > 0.0 || uvw.z > 0.0)
+    float dist = abs(local.x);
+    if (local.y > 0.0 || local.z > 0.0)
     {
-        dist = min(length(uvw.xy), length(uvw.xz));
+        dist = min(length(local.xy), length(local.xz));
     }
     const float alpha = smoothstep(0.5, 0.5 - fwidth(dist), dist);
     frag_color = vec4(color, alpha);
