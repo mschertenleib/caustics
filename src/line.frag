@@ -14,6 +14,6 @@ void main()
     {
         dist = min(length(local.xy), length(local.xz));
     }
-    const float alpha = smoothstep(0.5, 0.5 - fwidth(dist), dist);
+    const float alpha = smoothstep(0.5, 0.5 - fwidth(local.x), dist);
     frag_color = vec4(color, alpha);
 }
