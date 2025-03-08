@@ -5,13 +5,12 @@ in vec3 color;
 
 out vec4 frag_color;
 
-#define PI 3.1415926535897931
-
 void main()
 {
     const float dist = length(local.xy);
     const float thickness = local.z;
-    const float alpha = smoothstep(1.0 - thickness, 1.0 - thickness + fwidth(dist), dist)
-        - smoothstep(1.0 - fwidth(dist), 1.0, dist);
+    const float pixel_size = fwidth(dist);
+    const float alpha = clamp((1.0 - dist) / pixel_size, 0.0, 1.0)
+        - clamp((1.0 - thickness + pixel_size - dist) / pixel_size, 0.0, 1.0);
     frag_color = vec4(color, alpha);
 }

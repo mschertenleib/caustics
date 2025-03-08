@@ -242,9 +242,8 @@ struct Vertex
     vec3 color;
 };
 
-struct Scene_raster_geometry
+struct Raster_geometry
 {
-    float thickness;
     // TODO: merge these
     std::vector<Vertex> material_vertices;
     std::vector<std::uint32_t> material_indices;
@@ -704,19 +703,25 @@ void save_as_png(const char *file_name, int width, int height)
     return world_center + (u - 0.5f) * world_size;
 }
 
-[[nodiscard]] Scene_raster_geometry create_raster_geometry(const Scene &scene)
+void create_raster_geometry(const Scene &scene,
+                            float thickness,
+                            Raster_geometry &geometry)
 {
-    Scene_raster_geometry geometry {};
-    geometry.thickness = 0.005f;
+    geometry.circle_vertices.clear();
+    geometry.circle_indices.clear();
+    geometry.line_vertices.clear();
+    geometry.line_indices.clear();
+    geometry.arc_vertices.clear();
+    geometry.arc_indices.clear();
 
     for (const auto &circle : scene.circles)
     {
-        const auto half_side = circle.radius + 0.5f * geometry.thickness;
+        const auto half_side = circle.radius + 0.5f * thickness;
         const auto bottom_left = circle.center + vec2 {-half_side, -half_side};
         const auto bottom_right = circle.center + vec2 {half_side, -half_side};
         const auto top_right = circle.center + vec2 {half_side, half_side};
         const auto top_left = circle.center + vec2 {-half_side, half_side};
-        const auto rel_thickness = geometry.thickness / circle.radius;
+        const auto rel_thickness = thickness / half_side;
 
         const auto color = scene.materials[circle.material_id].color;
         const auto first_index =
@@ -743,13 +748,13 @@ void save_as_png(const char *file_name, int width, int height)
         const auto line_length = norm(line_vec);
         const auto line_dir = line_vec * (1.0f / line_length);
         const auto delta_left =
-            vec2 {-line_dir.y, line_dir.x} * (geometry.thickness * 0.5f);
-        const auto delta_up = line_dir * (geometry.thickness * 0.5f);
+            vec2 {-line_dir.y, line_dir.x} * (thickness * 0.5f);
+        const auto delta_up = line_dir * (thickness * 0.5f);
         const auto start_left = line.a + delta_left - delta_up;
         const auto start_right = line.a - delta_left - delta_up;
         const auto end_left = line.b + delta_left + delta_up;
         const auto end_right = line.b - delta_left + delta_up;
-        const auto aspect_ratio = line_length / geometry.thickness;
+        const auto aspect_ratio = line_length / thickness;
 
         const auto color = scene.materials[line.material_id].color;
         const auto first_index =
@@ -769,8 +774,6 @@ void save_as_png(const char *file_name, int width, int height)
         geometry.line_indices.push_back(first_index + 2);
         geometry.line_indices.push_back(first_index + 3);
     }
-
-    return geometry;
 }
 
 [[nodiscard]] Scene create_scene(int texture_width, int texture_height)
@@ -1090,7 +1093,11 @@ void run()
     const auto lines_ubo = create_uniform_buffer(3, scene.lines);
     const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
 
-    const auto raster_geometry = create_raster_geometry(scene);
+    // const float thickness_pixels {10.0f};
+    const float thickness {0.005f};
+    Raster_geometry raster_geometry {};
+    create_raster_geometry(scene, thickness, raster_geometry);
+
     const auto [line_vao, line_vbo, line_ibo] = create_vertex_index_buffers(
         raster_geometry.line_vertices, raster_geometry.line_indices);
     const auto [circle_vao, circle_vbo, circle_ibo] =

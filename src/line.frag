@@ -5,8 +5,6 @@ in vec3 color;
 
 out vec4 frag_color;
 
-#define PI 3.1415926535897931
-
 void main()
 {
     float dist = abs(local.x);
@@ -14,6 +12,8 @@ void main()
     {
         dist = min(length(local.xy), length(local.xz));
     }
-    const float alpha = smoothstep(0.5, 0.5 - fwidth(local.x), dist);
+    // NOTE: this assumes that the local x, y and z have the same scale
+    const float pixel_size = fwidth(local.x);
+    const float alpha = clamp((0.5 - dist) / pixel_size, 0.0, 1.0);
     frag_color = vec4(color, alpha);
 }
