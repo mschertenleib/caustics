@@ -592,26 +592,16 @@ create_graphics_program(const char *vertex_shader_file_name,
     return fbo;
 }
 
-[[nodiscard]] auto
-create_vertex_index_buffers(const std::vector<Vertex> &vertices,
-                            const std::vector<std::uint32_t> &indices)
+[[nodiscard]] auto create_vertex_index_buffers()
 {
     auto vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
     glBindVertexArray(vao.get());
 
     auto vbo = create_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ARRAY_BUFFER, vbo.get());
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizei>(vertices.size() * sizeof(Vertex)),
-                 vertices.data(),
-                 GL_STATIC_DRAW);
 
     auto ibo = create_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo.get());
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizei>(indices.size() * sizeof(std::uint32_t)),
-                 indices.data(),
-                 GL_STATIC_DRAW);
 
     glVertexAttribPointer(0,
                           sizeof(Vertex::position) / sizeof(float),
@@ -636,6 +626,27 @@ create_vertex_index_buffers(const std::vector<Vertex> &vertices,
     glEnableVertexAttribArray(2);
 
     return std::tuple {std::move(vao), std::move(vbo), std::move(ibo)};
+}
+
+void update_vertex_index_buffers(GLuint vao,
+                                 GLuint vbo,
+                                 GLuint ibo,
+                                 const std::vector<Vertex> &vertices,
+                                 const std::vector<std::uint32_t> &indices)
+{
+    glBindVertexArray(vao);
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizei>(vertices.size() * sizeof(Vertex)),
+                 vertices.data(),
+                 GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizei>(indices.size() * sizeof(std::uint32_t)),
+                 indices.data(),
+                 GL_STATIC_DRAW);
 }
 
 template <typename T>
@@ -713,6 +724,8 @@ void create_raster_geometry(const Scene &scene,
     geometry.line_indices.clear();
     geometry.arc_vertices.clear();
     geometry.arc_indices.clear();
+
+    thickness *= scene.view_height;
 
     for (const auto &circle : scene.circles)
     {
@@ -1043,7 +1056,7 @@ void run()
     int texture_height {240};
     auto scene = create_scene(texture_width, texture_height);
 
-    // #define COMPUTE_SHADER
+#define COMPUTE_SHADER
 
 #ifdef COMPUTE_SHADER
     const auto trace_program = create_trace_compute_program(scene);
@@ -1093,16 +1106,24 @@ void run()
     const auto lines_ubo = create_uniform_buffer(3, scene.lines);
     const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
 
-    // const float thickness_pixels {10.0f};
-    const float thickness {0.005f};
+    const float thickness {0.01f}; // In fraction of the view height
     Raster_geometry raster_geometry {};
     create_raster_geometry(scene, thickness, raster_geometry);
 
-    const auto [line_vao, line_vbo, line_ibo] = create_vertex_index_buffers(
-        raster_geometry.line_vertices, raster_geometry.line_indices);
+    const auto [line_vao, line_vbo, line_ibo] = create_vertex_index_buffers();
     const auto [circle_vao, circle_vbo, circle_ibo] =
-        create_vertex_index_buffers(raster_geometry.circle_vertices,
-                                    raster_geometry.circle_indices);
+        create_vertex_index_buffers();
+    update_vertex_index_buffers(circle_vao.get(),
+                                circle_vbo.get(),
+                                circle_ibo.get(),
+                                raster_geometry.circle_vertices,
+                                raster_geometry.circle_indices);
+    update_vertex_index_buffers(line_vao.get(),
+                                line_vbo.get(),
+                                line_ibo.get(),
+                                raster_geometry.line_vertices,
+                                raster_geometry.line_indices);
+
     const auto line_program =
         create_graphics_program("shader.vert", "line.frag");
     const auto circle_program =
@@ -1199,6 +1220,20 @@ void run()
             scene.view_width *= zoom;
             scene.view_height *= zoom;
             sample_index = 0;
+
+            // NOTE: we update the geometry when scrolling because the thickness
+            // is constant in view space and therefore changes in world space
+            create_raster_geometry(scene, thickness, raster_geometry);
+            update_vertex_index_buffers(circle_vao.get(),
+                                        circle_vbo.get(),
+                                        circle_ibo.get(),
+                                        raster_geometry.circle_vertices,
+                                        raster_geometry.circle_indices);
+            update_vertex_index_buffers(line_vao.get(),
+                                        line_vbo.get(),
+                                        line_ibo.get(),
+                                        raster_geometry.line_vertices,
+                                        raster_geometry.line_indices);
         }
 
         if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
@@ -1323,9 +1358,7 @@ void run()
                 loc_view_position_draw_line, scene.view_x, scene.view_y);
             glUniform2f(
                 loc_view_size_draw_line, scene.view_width, scene.view_height);
-#ifndef COMPUTE_SHADER
             glBindVertexArray(line_vao.get());
-#endif
             glDrawElements(
                 GL_TRIANGLES,
                 static_cast<GLsizei>(raster_geometry.line_indices.size()),
@@ -1338,9 +1371,7 @@ void run()
                 loc_view_position_draw_circle, scene.view_x, scene.view_y);
             glUniform2f(
                 loc_view_size_draw_circle, scene.view_width, scene.view_height);
-#ifndef COMPUTE_SHADER
             glBindVertexArray(circle_vao.get());
-#endif
             glDrawElements(
                 GL_TRIANGLES,
                 static_cast<GLsizei>(raster_geometry.circle_indices.size()),
