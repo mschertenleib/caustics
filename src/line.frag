@@ -1,6 +1,6 @@
 #version 430
 
-in vec3 local;
+in vec4 local;
 in vec3 color;
 
 out vec4 frag_color;

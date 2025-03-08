@@ -1,13 +1,13 @@
 #version 430
 
 layout (location = 0) in vec2 vertex_position;
-layout (location = 1) in vec3 vertex_local;
+layout (location = 1) in vec4 vertex_local;
 layout (location = 2) in vec3 vertex_color;
 
 uniform vec2 view_position;
 uniform vec2 view_size;
 
-out vec3 local;
+out vec4 local;
 out vec3 color;
 
 void main()

@@ -186,6 +186,14 @@ struct vec3
     float z;
 };
 
+struct vec4
+{
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
 enum struct Material_type : std::uint32_t
 {
     diffuse,
@@ -238,7 +246,7 @@ struct Scene
 struct Vertex
 {
     vec2 position;
-    vec3 local;
+    vec4 local;
     vec3 color;
 };
 
@@ -740,13 +748,13 @@ void create_raster_geometry(const Scene &scene,
         const auto first_index =
             static_cast<std::uint32_t>(geometry.circle_vertices.size());
         geometry.circle_vertices.push_back(
-            {bottom_left, {-1.0, -1.0f, rel_thickness}, color});
+            {bottom_left, {-1.0, -1.0f, rel_thickness, 0.0f}, color});
         geometry.circle_vertices.push_back(
-            {bottom_right, {1.0f, -1.0f, rel_thickness}, color});
+            {bottom_right, {1.0f, -1.0f, rel_thickness, 0.0f}, color});
         geometry.circle_vertices.push_back(
-            {top_right, {1.0f, 1.0f, rel_thickness}, color});
+            {top_right, {1.0f, 1.0f, rel_thickness, 0.0f}, color});
         geometry.circle_vertices.push_back(
-            {top_left, {-1.0f, 1.0f, rel_thickness}, color});
+            {top_left, {-1.0f, 1.0f, rel_thickness, 0.0f}, color});
         geometry.circle_indices.push_back(first_index + 0);
         geometry.circle_indices.push_back(first_index + 1);
         geometry.circle_indices.push_back(first_index + 2);
@@ -773,19 +781,55 @@ void create_raster_geometry(const Scene &scene,
         const auto first_index =
             static_cast<std::uint32_t>(geometry.line_vertices.size());
         geometry.line_vertices.push_back(
-            {start_left, {-0.5f, 0.5f, -aspect_ratio - 0.5f}, color});
+            {start_left, {-0.5f, 0.5f, -aspect_ratio - 0.5f, 0.0f}, color});
         geometry.line_vertices.push_back(
-            {start_right, {0.5f, 0.5f, -aspect_ratio - 0.5f}, color});
+            {start_right, {0.5f, 0.5f, -aspect_ratio - 0.5f, 0.0f}, color});
         geometry.line_vertices.push_back(
-            {end_right, {0.5f, -aspect_ratio - 0.5f, 0.5f}, color});
+            {end_right, {0.5f, -aspect_ratio - 0.5f, 0.5f, 0.0f}, color});
         geometry.line_vertices.push_back(
-            {end_left, {-0.5f, -aspect_ratio - 0.5f, 0.5f}, color});
+            {end_left, {-0.5f, -aspect_ratio - 0.5f, 0.5f, 0.0f}, color});
         geometry.line_indices.push_back(first_index + 0);
         geometry.line_indices.push_back(first_index + 1);
         geometry.line_indices.push_back(first_index + 2);
         geometry.line_indices.push_back(first_index + 0);
         geometry.line_indices.push_back(first_index + 2);
         geometry.line_indices.push_back(first_index + 3);
+    }
+
+    for (const auto &arc : scene.arcs)
+    {
+        const auto half_side = arc.radius + 0.5f * thickness;
+        const auto bottom_y = arc.b - 0.5f * thickness;
+        const auto dir = arc.a;
+        const auto left = vec2 {-dir.y, dir.x};
+        const auto bottom_left = arc.center + dir * bottom_y + left * half_side;
+        const auto bottom_right =
+            arc.center + dir * bottom_y - left * half_side;
+        const auto top_right = arc.center + (dir - left) * half_side;
+        const auto top_left = arc.center + (dir + left) * half_side;
+        const auto rel_thickness = thickness / half_side;
+        const auto cutoff = arc.b / half_side;
+        const auto bottom_coords = bottom_y / half_side;
+
+        const auto color = scene.materials[arc.material_id].color;
+        const auto first_index =
+            static_cast<std::uint32_t>(geometry.arc_vertices.size());
+        geometry.arc_vertices.push_back(
+            {bottom_left, {-1.0, bottom_coords, rel_thickness, cutoff}, color});
+        geometry.arc_vertices.push_back(
+            {bottom_right,
+             {1.0f, bottom_coords, rel_thickness, cutoff},
+             color});
+        geometry.arc_vertices.push_back(
+            {top_right, {1.0f, 1.0f, rel_thickness, cutoff}, color});
+        geometry.arc_vertices.push_back(
+            {top_left, {-1.0f, 1.0f, rel_thickness, cutoff}, color});
+        geometry.arc_indices.push_back(first_index + 0);
+        geometry.arc_indices.push_back(first_index + 1);
+        geometry.arc_indices.push_back(first_index + 2);
+        geometry.arc_indices.push_back(first_index + 0);
+        geometry.arc_indices.push_back(first_index + 2);
+        geometry.arc_indices.push_back(first_index + 3);
     }
 }
 
@@ -1106,13 +1150,14 @@ void run()
     const auto lines_ubo = create_uniform_buffer(3, scene.lines);
     const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
 
-    const float thickness {0.01f}; // In fraction of the view height
+    const float thickness {0.03f}; // In fraction of the view height
     Raster_geometry raster_geometry {};
     create_raster_geometry(scene, thickness, raster_geometry);
 
     const auto [line_vao, line_vbo, line_ibo] = create_vertex_index_buffers();
     const auto [circle_vao, circle_vbo, circle_ibo] =
         create_vertex_index_buffers();
+    const auto [arc_vao, arc_vbo, arc_ibo] = create_vertex_index_buffers();
     update_vertex_index_buffers(circle_vao.get(),
                                 circle_vbo.get(),
                                 circle_ibo.get(),
@@ -1123,11 +1168,17 @@ void run()
                                 line_ibo.get(),
                                 raster_geometry.line_vertices,
                                 raster_geometry.line_indices);
+    update_vertex_index_buffers(arc_vao.get(),
+                                arc_vbo.get(),
+                                arc_ibo.get(),
+                                raster_geometry.arc_vertices,
+                                raster_geometry.arc_indices);
 
     const auto line_program =
         create_graphics_program("shader.vert", "line.frag");
     const auto circle_program =
         create_graphics_program("shader.vert", "circle.frag");
+    const auto arc_program = create_graphics_program("shader.vert", "arc.frag");
     const auto loc_view_position_draw_line =
         glGetUniformLocation(line_program.get(), "view_position");
     const auto loc_view_size_draw_line =
@@ -1136,6 +1187,10 @@ void run()
         glGetUniformLocation(circle_program.get(), "view_position");
     const auto loc_view_size_draw_circle =
         glGetUniformLocation(circle_program.get(), "view_size");
+    const auto loc_view_position_draw_arc =
+        glGetUniformLocation(arc_program.get(), "view_position");
+    const auto loc_view_size_draw_arc =
+        glGetUniformLocation(arc_program.get(), "view_size");
 
     constexpr unsigned int max_samples {200'000};
     unsigned int sample_index {0};
@@ -1234,6 +1289,11 @@ void run()
                                         line_ibo.get(),
                                         raster_geometry.line_vertices,
                                         raster_geometry.line_indices);
+            update_vertex_index_buffers(arc_vao.get(),
+                                        arc_vbo.get(),
+                                        arc_ibo.get(),
+                                        raster_geometry.arc_vertices,
+                                        raster_geometry.arc_indices);
         }
 
         if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
@@ -1375,6 +1435,18 @@ void run()
             glDrawElements(
                 GL_TRIANGLES,
                 static_cast<GLsizei>(raster_geometry.circle_indices.size()),
+                GL_UNSIGNED_INT,
+                nullptr);
+        }
+        {
+            glUseProgram(arc_program.get());
+            glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
+            glUniform2f(
+                loc_view_size_draw_arc, scene.view_width, scene.view_height);
+            glBindVertexArray(arc_vao.get());
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(raster_geometry.arc_indices.size()),
                 GL_UNSIGNED_INT,
                 nullptr);
         }

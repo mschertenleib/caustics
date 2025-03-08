@@ -56,6 +56,7 @@ set(SHADERS
     src/shader.vert
     src/line.frag
     src/circle.frag
+    src/arc.frag
     src/fullscreen.vert
 )
 add_custom_target(shaders ALL DEPENDS ${SHADERS})
