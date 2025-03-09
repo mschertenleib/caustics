@@ -1150,7 +1150,7 @@ void run()
     const auto lines_ubo = create_uniform_buffer(3, scene.lines);
     const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
 
-    const float thickness {0.03f}; // In fraction of the view height
+    const float thickness {0.0075f}; // In fraction of the view height
     Raster_geometry raster_geometry {};
     create_raster_geometry(scene, thickness, raster_geometry);
 
