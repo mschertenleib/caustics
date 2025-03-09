@@ -252,15 +252,14 @@ struct Vertex
 
 struct Raster_geometry
 {
-    // TODO: merge these
-    std::vector<Vertex> material_vertices;
-    std::vector<std::uint32_t> material_indices;
-    std::vector<Vertex> circle_vertices;
-    std::vector<std::uint32_t> circle_indices;
-    std::vector<Vertex> line_vertices;
-    std::vector<std::uint32_t> line_indices;
-    std::vector<Vertex> arc_vertices;
-    std::vector<std::uint32_t> arc_indices;
+    std::size_t circle_indices_offset;
+    std::size_t circle_indices_size;
+    std::size_t line_indices_offset;
+    std::size_t line_indices_size;
+    std::size_t arc_indices_offset;
+    std::size_t arc_indices_size;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
 };
 
 struct Viewport
@@ -600,16 +599,26 @@ create_graphics_program(const char *vertex_shader_file_name,
     return fbo;
 }
 
-[[nodiscard]] auto create_vertex_index_buffers()
+[[nodiscard]] auto create_vertex_index_buffers(const Raster_geometry &geometry)
 {
     auto vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
     glBindVertexArray(vao.get());
 
     auto vbo = create_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ARRAY_BUFFER, vbo.get());
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizei>(geometry.vertices.size() * sizeof(Vertex)),
+        geometry.vertices.data(),
+        GL_DYNAMIC_DRAW);
 
     auto ibo = create_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo.get());
+    glBufferData(
+        GL_ELEMENT_ARRAY_BUFFER,
+        static_cast<GLsizei>(geometry.indices.size() * sizeof(std::uint32_t)),
+        geometry.indices.data(),
+        GL_STATIC_DRAW);
 
     glVertexAttribPointer(0,
                           sizeof(Vertex::position) / sizeof(float),
@@ -639,22 +648,23 @@ create_graphics_program(const char *vertex_shader_file_name,
 void update_vertex_index_buffers(GLuint vao,
                                  GLuint vbo,
                                  GLuint ibo,
-                                 const std::vector<Vertex> &vertices,
-                                 const std::vector<std::uint32_t> &indices)
+                                 const Raster_geometry &geometry)
 {
     glBindVertexArray(vao);
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizei>(vertices.size() * sizeof(Vertex)),
-                 vertices.data(),
-                 GL_DYNAMIC_DRAW);
+    glBufferSubData(
+        GL_ARRAY_BUFFER,
+        0,
+        static_cast<GLsizei>(geometry.vertices.size() * sizeof(Vertex)),
+        geometry.vertices.data());
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizei>(indices.size() * sizeof(std::uint32_t)),
-                 indices.data(),
-                 GL_STATIC_DRAW);
+    glBufferSubData(
+        GL_ELEMENT_ARRAY_BUFFER,
+        0,
+        static_cast<GLsizei>(geometry.indices.size() * sizeof(std::uint32_t)),
+        geometry.indices.data());
 }
 
 template <typename T>
@@ -726,15 +736,12 @@ void create_raster_geometry(const Scene &scene,
                             float thickness,
                             Raster_geometry &geometry)
 {
-    geometry.circle_vertices.clear();
-    geometry.circle_indices.clear();
-    geometry.line_vertices.clear();
-    geometry.line_indices.clear();
-    geometry.arc_vertices.clear();
-    geometry.arc_indices.clear();
+    geometry.vertices.clear();
+    geometry.indices.clear();
 
     thickness *= scene.view_height;
 
+    geometry.circle_indices_offset = geometry.indices.size();
     for (const auto &circle : scene.circles)
     {
         const auto half_side = circle.radius + 0.5f * thickness;
@@ -746,23 +753,26 @@ void create_raster_geometry(const Scene &scene,
 
         const auto color = scene.materials[circle.material_id].color;
         const auto first_index =
-            static_cast<std::uint32_t>(geometry.circle_vertices.size());
-        geometry.circle_vertices.push_back(
+            static_cast<std::uint32_t>(geometry.vertices.size());
+        geometry.vertices.push_back(
             {bottom_left, {-1.0, -1.0f, rel_thickness, 0.0f}, color});
-        geometry.circle_vertices.push_back(
+        geometry.vertices.push_back(
             {bottom_right, {1.0f, -1.0f, rel_thickness, 0.0f}, color});
-        geometry.circle_vertices.push_back(
+        geometry.vertices.push_back(
             {top_right, {1.0f, 1.0f, rel_thickness, 0.0f}, color});
-        geometry.circle_vertices.push_back(
+        geometry.vertices.push_back(
             {top_left, {-1.0f, 1.0f, rel_thickness, 0.0f}, color});
-        geometry.circle_indices.push_back(first_index + 0);
-        geometry.circle_indices.push_back(first_index + 1);
-        geometry.circle_indices.push_back(first_index + 2);
-        geometry.circle_indices.push_back(first_index + 0);
-        geometry.circle_indices.push_back(first_index + 2);
-        geometry.circle_indices.push_back(first_index + 3);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 1);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 3);
     }
+    geometry.circle_indices_size =
+        geometry.indices.size() - geometry.circle_indices_offset;
 
+    geometry.line_indices_offset = geometry.indices.size();
     for (const auto &line : scene.lines)
     {
         const auto line_vec = line.b - line.a;
@@ -779,23 +789,26 @@ void create_raster_geometry(const Scene &scene,
 
         const auto color = scene.materials[line.material_id].color;
         const auto first_index =
-            static_cast<std::uint32_t>(geometry.line_vertices.size());
-        geometry.line_vertices.push_back(
+            static_cast<std::uint32_t>(geometry.vertices.size());
+        geometry.vertices.push_back(
             {start_left, {-0.5f, 0.5f, -aspect_ratio - 0.5f, 0.0f}, color});
-        geometry.line_vertices.push_back(
+        geometry.vertices.push_back(
             {start_right, {0.5f, 0.5f, -aspect_ratio - 0.5f, 0.0f}, color});
-        geometry.line_vertices.push_back(
+        geometry.vertices.push_back(
             {end_right, {0.5f, -aspect_ratio - 0.5f, 0.5f, 0.0f}, color});
-        geometry.line_vertices.push_back(
+        geometry.vertices.push_back(
             {end_left, {-0.5f, -aspect_ratio - 0.5f, 0.5f, 0.0f}, color});
-        geometry.line_indices.push_back(first_index + 0);
-        geometry.line_indices.push_back(first_index + 1);
-        geometry.line_indices.push_back(first_index + 2);
-        geometry.line_indices.push_back(first_index + 0);
-        geometry.line_indices.push_back(first_index + 2);
-        geometry.line_indices.push_back(first_index + 3);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 1);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 3);
     }
+    geometry.line_indices_size =
+        geometry.indices.size() - geometry.line_indices_offset;
 
+    geometry.arc_indices_offset = geometry.indices.size();
     for (const auto &arc : scene.arcs)
     {
         const auto half_side = arc.radius + 0.5f * thickness;
@@ -809,28 +822,28 @@ void create_raster_geometry(const Scene &scene,
         const auto top_left = arc.center + (dir + left) * half_side;
         const auto rel_thickness = thickness / half_side;
         const auto cutoff = arc.b / half_side;
-        const auto bottom_coords = bottom_y / half_side;
+        const auto bottom_coord = bottom_y / half_side;
 
         const auto color = scene.materials[arc.material_id].color;
         const auto first_index =
-            static_cast<std::uint32_t>(geometry.arc_vertices.size());
-        geometry.arc_vertices.push_back(
-            {bottom_left, {-1.0, bottom_coords, rel_thickness, cutoff}, color});
-        geometry.arc_vertices.push_back(
-            {bottom_right,
-             {1.0f, bottom_coords, rel_thickness, cutoff},
-             color});
-        geometry.arc_vertices.push_back(
+            static_cast<std::uint32_t>(geometry.vertices.size());
+        geometry.vertices.push_back(
+            {bottom_left, {-1.0, bottom_coord, rel_thickness, cutoff}, color});
+        geometry.vertices.push_back(
+            {bottom_right, {1.0f, bottom_coord, rel_thickness, cutoff}, color});
+        geometry.vertices.push_back(
             {top_right, {1.0f, 1.0f, rel_thickness, cutoff}, color});
-        geometry.arc_vertices.push_back(
+        geometry.vertices.push_back(
             {top_left, {-1.0f, 1.0f, rel_thickness, cutoff}, color});
-        geometry.arc_indices.push_back(first_index + 0);
-        geometry.arc_indices.push_back(first_index + 1);
-        geometry.arc_indices.push_back(first_index + 2);
-        geometry.arc_indices.push_back(first_index + 0);
-        geometry.arc_indices.push_back(first_index + 2);
-        geometry.arc_indices.push_back(first_index + 3);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 1);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 3);
     }
+    geometry.arc_indices_size =
+        geometry.indices.size() - geometry.arc_indices_offset;
 }
 
 [[nodiscard]] Scene create_scene(int texture_width, int texture_height)
@@ -1154,39 +1167,27 @@ void run()
     Raster_geometry raster_geometry {};
     create_raster_geometry(scene, thickness, raster_geometry);
 
-    const auto [line_vao, line_vbo, line_ibo] = create_vertex_index_buffers();
-    const auto [circle_vao, circle_vbo, circle_ibo] =
-        create_vertex_index_buffers();
-    const auto [arc_vao, arc_vbo, arc_ibo] = create_vertex_index_buffers();
-    update_vertex_index_buffers(circle_vao.get(),
-                                circle_vbo.get(),
-                                circle_ibo.get(),
-                                raster_geometry.circle_vertices,
-                                raster_geometry.circle_indices);
-    update_vertex_index_buffers(line_vao.get(),
-                                line_vbo.get(),
-                                line_ibo.get(),
-                                raster_geometry.line_vertices,
-                                raster_geometry.line_indices);
-    update_vertex_index_buffers(arc_vao.get(),
-                                arc_vbo.get(),
-                                arc_ibo.get(),
-                                raster_geometry.arc_vertices,
-                                raster_geometry.arc_indices);
+    // TODO: we should probably organize the raster geometry better. We need to
+    // clarify the distinction between updating the vertex buffer (when
+    // zooming or moving objects) and re-creating the vertex and index buffers
+    // with a new size (when adding or removing objects).
+    const auto [vao, vbo, ibo] = create_vertex_index_buffers(raster_geometry);
+    update_vertex_index_buffers(
+        vao.get(), vbo.get(), ibo.get(), raster_geometry);
 
-    const auto line_program =
-        create_graphics_program("shader.vert", "line.frag");
     const auto circle_program =
         create_graphics_program("shader.vert", "circle.frag");
+    const auto line_program =
+        create_graphics_program("shader.vert", "line.frag");
     const auto arc_program = create_graphics_program("shader.vert", "arc.frag");
-    const auto loc_view_position_draw_line =
-        glGetUniformLocation(line_program.get(), "view_position");
-    const auto loc_view_size_draw_line =
-        glGetUniformLocation(line_program.get(), "view_size");
     const auto loc_view_position_draw_circle =
         glGetUniformLocation(circle_program.get(), "view_position");
     const auto loc_view_size_draw_circle =
         glGetUniformLocation(circle_program.get(), "view_size");
+    const auto loc_view_position_draw_line =
+        glGetUniformLocation(line_program.get(), "view_position");
+    const auto loc_view_size_draw_line =
+        glGetUniformLocation(line_program.get(), "view_size");
     const auto loc_view_position_draw_arc =
         glGetUniformLocation(arc_program.get(), "view_position");
     const auto loc_view_size_draw_arc =
@@ -1279,21 +1280,8 @@ void run()
             // NOTE: we update the geometry when scrolling because the thickness
             // is constant in view space and therefore changes in world space
             create_raster_geometry(scene, thickness, raster_geometry);
-            update_vertex_index_buffers(circle_vao.get(),
-                                        circle_vbo.get(),
-                                        circle_ibo.get(),
-                                        raster_geometry.circle_vertices,
-                                        raster_geometry.circle_indices);
-            update_vertex_index_buffers(line_vao.get(),
-                                        line_vbo.get(),
-                                        line_ibo.get(),
-                                        raster_geometry.line_vertices,
-                                        raster_geometry.line_indices);
-            update_vertex_index_buffers(arc_vao.get(),
-                                        arc_vbo.get(),
-                                        arc_ibo.get(),
-                                        raster_geometry.arc_vertices,
-                                        raster_geometry.arc_indices);
+            update_vertex_index_buffers(
+                vao.get(), vbo.get(), ibo.get(), raster_geometry);
         }
 
         if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
@@ -1412,44 +1400,40 @@ void run()
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
-        {
-            glUseProgram(line_program.get());
-            glUniform2f(
-                loc_view_position_draw_line, scene.view_x, scene.view_y);
-            glUniform2f(
-                loc_view_size_draw_line, scene.view_width, scene.view_height);
-            glBindVertexArray(line_vao.get());
-            glDrawElements(
-                GL_TRIANGLES,
-                static_cast<GLsizei>(raster_geometry.line_indices.size()),
-                GL_UNSIGNED_INT,
-                nullptr);
-        }
-        {
-            glUseProgram(circle_program.get());
-            glUniform2f(
-                loc_view_position_draw_circle, scene.view_x, scene.view_y);
-            glUniform2f(
-                loc_view_size_draw_circle, scene.view_width, scene.view_height);
-            glBindVertexArray(circle_vao.get());
-            glDrawElements(
-                GL_TRIANGLES,
-                static_cast<GLsizei>(raster_geometry.circle_indices.size()),
-                GL_UNSIGNED_INT,
-                nullptr);
-        }
-        {
-            glUseProgram(arc_program.get());
-            glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
-            glUniform2f(
-                loc_view_size_draw_arc, scene.view_width, scene.view_height);
-            glBindVertexArray(arc_vao.get());
-            glDrawElements(
-                GL_TRIANGLES,
-                static_cast<GLsizei>(raster_geometry.arc_indices.size()),
-                GL_UNSIGNED_INT,
-                nullptr);
-        }
+        glBindVertexArray(vao.get());
+
+        glUseProgram(circle_program.get());
+        glUniform2f(loc_view_position_draw_circle, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_circle, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.circle_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.circle_indices_offset *
+                                     sizeof(std::uint32_t)));
+
+        glUseProgram(line_program.get());
+        glUniform2f(loc_view_position_draw_line, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_line, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.line_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.line_indices_offset *
+                                     sizeof(std::uint32_t)));
+
+        glUseProgram(arc_program.get());
+        glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_arc, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.arc_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
+                                     sizeof(std::uint32_t)));
 
         if (auto_workload)
         {
