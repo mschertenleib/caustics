@@ -1,5 +1,9 @@
 #include "vec2.hpp"
 
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
@@ -1109,6 +1113,31 @@ void run()
         auto_workload = true;
     }
 
+    // TODO: clean this up
+    IMGUI_CHECKVERSION();
+    auto *const ctx_ptr = ImGui::CreateContext();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::StyleColorsDark();
+    if (!ImGui_ImplGlfw_InitForOpenGL(window.get(), true))
+    {
+        ImGui::DestroyContext(ctx_ptr);
+        throw std::runtime_error("ImGui: failed to initialize GLFW backend");
+    }
+    if (!ImGui_ImplOpenGL3_Init("#version 130"))
+    {
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext(ctx_ptr);
+        throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
+    }
+    const auto shutdown_imgui = [](ImGuiContext *ctx)
+    {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext(ctx);
+    };
+    const std::unique_ptr<ImGuiContext, decltype(shutdown_imgui)> imgui_context(
+        ctx_ptr, shutdown_imgui);
+
     int texture_width {320};
     int texture_height {240};
     auto scene = create_scene(texture_width, texture_height);
@@ -1235,98 +1264,114 @@ void run()
                             scene.view_y,
                             scene.view_height);
 
-        if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
-            GLFW_PRESS)
+        if (!ImGui::GetIO().WantCaptureMouse)
         {
-            if (!dragging)
+            if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
+                GLFW_PRESS)
             {
-                dragging = true;
-                drag_source_mouse_x = mouse_world_x;
-                drag_source_mouse_y = mouse_world_y;
+                if (!dragging)
+                {
+                    dragging = true;
+                    drag_source_mouse_x = mouse_world_x;
+                    drag_source_mouse_y = mouse_world_y;
+                }
+                else
+                {
+                    const auto drag_delta_x =
+                        mouse_world_x - drag_source_mouse_x;
+                    const auto drag_delta_y =
+                        mouse_world_y - drag_source_mouse_y;
+                    if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
+                    {
+                        scene.view_x -= drag_delta_x;
+                        scene.view_y -= drag_delta_y;
+                        mouse_world_x = drag_source_mouse_x;
+                        mouse_world_y = drag_source_mouse_y;
+                        sample_index = 0;
+                    }
+                }
             }
             else
             {
-                const auto drag_delta_x = mouse_world_x - drag_source_mouse_x;
-                const auto drag_delta_y = mouse_world_y - drag_source_mouse_y;
-                if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
+                dragging = false;
+            }
+
+            if (window_state.scroll_offset != 0.0f)
+            {
+                constexpr float zoom_factor {1.2f};
+                const auto zoom = window_state.scroll_offset > 0.0f
+                                      ? 1.0f / zoom_factor
+                                      : zoom_factor;
+                scene.view_x =
+                    mouse_world_x - (mouse_world_x - scene.view_x) * zoom;
+                scene.view_y =
+                    mouse_world_y - (mouse_world_y - scene.view_y) * zoom;
+                scene.view_width *= zoom;
+                scene.view_height *= zoom;
+                sample_index = 0;
+
+                // NOTE: we update the geometry when scrolling because the
+                // thickness is constant in view space and therefore changes in
+                // world space
+                create_raster_geometry(scene, thickness, raster_geometry);
+                update_vertex_index_buffers(
+                    vao.get(), vbo.get(), ibo.get(), raster_geometry);
+            }
+        }
+
+        if (!ImGui::GetIO().WantCaptureKeyboard)
+        {
+            if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
+            {
+                sample_index = 0;
+            }
+
+            if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
+                p_state == GLFW_PRESS && !p_pressed)
+            {
+                p_pressed = true;
+                save_as_png("image.png", texture_width, texture_height);
+            }
+            else if (p_state == GLFW_RELEASE)
+            {
+                p_pressed = false;
+            }
+
+            if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
+                s_state == GLFW_PRESS && !s_pressed)
+            {
+                s_pressed = true;
+                save_scene(scene, "scene.yaml");
+            }
+            else if (s_state == GLFW_RELEASE)
+            {
+                s_pressed = false;
+            }
+
+            if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
+                l_state == GLFW_PRESS && !l_pressed)
+            {
+                l_pressed = true;
+                const auto new_scene = load_scene("scene.yaml");
+                std::cerr
+                    << "Scene loading is not yet supported as it requires "
+                       "recreating some resources\n";
+                if (new_scene.has_value())
                 {
-                    scene.view_x -= drag_delta_x;
-                    scene.view_y -= drag_delta_y;
-                    mouse_world_x = drag_source_mouse_x;
-                    mouse_world_y = drag_source_mouse_y;
-                    sample_index = 0;
+                    save_scene(new_scene.value(), "new_scene.yaml");
                 }
             }
-        }
-        else
-        {
-            dragging = false;
-        }
-
-        if (window_state.scroll_offset != 0.0f)
-        {
-            constexpr float zoom_factor {1.2f};
-            const auto zoom = window_state.scroll_offset > 0.0f
-                                  ? 1.0f / zoom_factor
-                                  : zoom_factor;
-            scene.view_x =
-                mouse_world_x - (mouse_world_x - scene.view_x) * zoom;
-            scene.view_y =
-                mouse_world_y - (mouse_world_y - scene.view_y) * zoom;
-            scene.view_width *= zoom;
-            scene.view_height *= zoom;
-            sample_index = 0;
-
-            // NOTE: we update the geometry when scrolling because the thickness
-            // is constant in view space and therefore changes in world space
-            create_raster_geometry(scene, thickness, raster_geometry);
-            update_vertex_index_buffers(
-                vao.get(), vbo.get(), ibo.get(), raster_geometry);
-        }
-
-        if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
-        {
-            sample_index = 0;
-        }
-
-        if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
-            p_state == GLFW_PRESS && !p_pressed)
-        {
-            p_pressed = true;
-            save_as_png("image.png", texture_width, texture_height);
-        }
-        else if (p_state == GLFW_RELEASE)
-        {
-            p_pressed = false;
-        }
-
-        if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
-            s_state == GLFW_PRESS && !s_pressed)
-        {
-            s_pressed = true;
-            save_scene(scene, "scene.yaml");
-        }
-        else if (s_state == GLFW_RELEASE)
-        {
-            s_pressed = false;
-        }
-
-        if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
-            l_state == GLFW_PRESS && !l_pressed)
-        {
-            l_pressed = true;
-            const auto new_scene = load_scene("scene.yaml");
-            std::cerr << "Scene loading is not yet supported as it requires "
-                         "recreating some resources\n";
-            if (new_scene.has_value())
+            else if (l_state == GLFW_RELEASE)
             {
-                save_scene(new_scene.value(), "new_scene.yaml");
+                l_pressed = false;
             }
         }
-        else if (l_state == GLFW_RELEASE)
-        {
-            l_pressed = false;
-        }
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        ImGui::ShowDemoWindow();
+        ImGui::Render();
 
         if (auto_workload)
         {
@@ -1439,6 +1484,8 @@ void run()
         {
             glQueryCounter(query_end.get(), GL_TIMESTAMP);
         }
+
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window.get());
 

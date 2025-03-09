@@ -37,6 +37,31 @@ CPMAddPackage(
 
 
 CPMAddPackage(
+        GITHUB_REPOSITORY ocornut/imgui
+        GIT_TAG v1.90.3
+        DOWNLOAD_ONLY YES
+)
+add_library(imgui STATIC)
+target_sources(imgui PRIVATE
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui.h
+        ${imgui_SOURCE_DIR}/imgui_internal.h
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui SYSTEM
+        PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+)
+target_link_libraries(imgui PRIVATE OpenGL::GL glfw)
+
+
+CPMAddPackage(
     GITHUB_REPOSITORY nothings/stb
     GIT_TAG f4a71b1
     DOWNLOAD_ONLY YES
@@ -46,7 +71,7 @@ CPMAddPackage(
 add_executable(caustics src/main.cpp src/vec2.hpp)
 target_compile_features(caustics PRIVATE cxx_std_20)
 target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(caustics PRIVATE OpenGL::GL glfw)
+target_link_libraries(caustics PRIVATE OpenGL::GL glfw imgui)
 
 
 # NOTE: this custom target is for always copying the shaders to the binary directory
