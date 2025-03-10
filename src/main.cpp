@@ -651,7 +651,6 @@ create_graphics_program(const char *vertex_shader_file_name,
 
 void update_vertex_index_buffers(GLuint vao,
                                  GLuint vbo,
-                                 GLuint ibo,
                                  const Raster_geometry &geometry)
 {
     glBindVertexArray(vao);
@@ -662,13 +661,6 @@ void update_vertex_index_buffers(GLuint vao,
         0,
         static_cast<GLsizei>(geometry.vertices.size() * sizeof(Vertex)),
         geometry.vertices.data());
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-    glBufferSubData(
-        GL_ELEMENT_ARRAY_BUFFER,
-        0,
-        static_cast<GLsizei>(geometry.indices.size() * sizeof(std::uint32_t)),
-        geometry.indices.data());
 }
 
 template <typename T>
@@ -1201,8 +1193,6 @@ void run()
     // zooming or moving objects) and re-creating the vertex and index buffers
     // with a new size (when adding or removing objects).
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(raster_geometry);
-    update_vertex_index_buffers(
-        vao.get(), vbo.get(), ibo.get(), raster_geometry);
 
     const auto circle_program =
         create_graphics_program("shader.vert", "circle.frag");
@@ -1315,7 +1305,7 @@ void run()
                 // world space
                 create_raster_geometry(scene, thickness, raster_geometry);
                 update_vertex_index_buffers(
-                    vao.get(), vbo.get(), ibo.get(), raster_geometry);
+                    vao.get(), vbo.get(), raster_geometry);
             }
         }
 
