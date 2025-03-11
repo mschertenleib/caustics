@@ -100,6 +100,36 @@ namespace
 
 ENUMERATE_GL_FUNCTIONS(DECLARE_GL_FUNCTION)
 
+template <typename F>
+class Scope_exit
+{
+public:
+    explicit Scope_exit(F &&f) : m_f(std::move(f))
+    {
+    }
+
+    explicit Scope_exit(F &f) : m_f(f)
+    {
+    }
+
+    ~Scope_exit() noexcept
+    {
+        m_f();
+    }
+
+    Scope_exit(const Scope_exit &) = delete;
+    Scope_exit(Scope_exit &&) = delete;
+    Scope_exit &operator=(const Scope_exit &) = delete;
+    Scope_exit &operator=(Scope_exit &&) = delete;
+
+private:
+    F m_f;
+};
+
+#define CONCATENATE_IMPL(s1, s2) s1##s2
+#define CONCATENATE(s1, s2)      CONCATENATE_IMPL(s1, s2)
+#define SCOPE_EXIT(f)            const Scope_exit CONCATENATE(scope_exit_, __LINE__)(f)
+
 template <typename Destroy>
 class GL_object
 {
@@ -668,9 +698,9 @@ create_graphics_program(const char *vertex_shader_file_name,
     return std::tuple {std::move(vao), std::move(vbo), std::move(ibo)};
 }
 
-void update_vertex_index_buffers(GLuint vao,
-                                 GLuint vbo,
-                                 const Raster_geometry &geometry)
+void update_vertex_buffer(GLuint vao,
+                          GLuint vbo,
+                          const Raster_geometry &geometry)
 {
     glBindVertexArray(vao);
 
@@ -1060,39 +1090,33 @@ void run()
     {
         throw std::runtime_error("Failed to initialize GLFW");
     }
+    SCOPE_EXIT([] { glfwTerminate(); });
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
 
-    auto window_ptr = glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
-    if (window_ptr == nullptr)
+    const auto window =
+        glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
+    if (window == nullptr)
     {
-        glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
-    const auto destroy_window = [](GLFWwindow *window)
-    {
-        glfwDestroyWindow(window);
-        glfwTerminate();
-    };
-    const std::unique_ptr<GLFWwindow, decltype(destroy_window)> window(
-        window_ptr, destroy_window);
+    SCOPE_EXIT([window] { glfwDestroyWindow(window); });
 
-    glfwMakeContextCurrent(window.get());
+    glfwMakeContextCurrent(window);
 
     Window_state window_state {};
-    glfwSetWindowUserPointer(window.get(), &window_state);
+    glfwSetWindowUserPointer(window, &window_state);
 
-    glfwSetWindowContentScaleCallback(window.get(),
+    glfwSetWindowContentScaleCallback(window,
                                       &glfw_window_content_scale_callback);
-    glfwSetFramebufferSizeCallback(window.get(),
-                                   &glfw_framebuffer_size_callback);
-    glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
+    glfwSetFramebufferSizeCallback(window, &glfw_framebuffer_size_callback);
+    glfwSetScrollCallback(window, &glfw_scroll_callback);
 
     glfwGetWindowContentScale(
-        window.get(), &window_state.scale_x, &window_state.scale_y);
-    glfwGetFramebufferSize(window.get(),
+        window, &window_state.scale_x, &window_state.scale_y);
+    glfwGetFramebufferSize(window,
                            &window_state.framebuffer_width,
                            &window_state.framebuffer_height);
 
@@ -1124,30 +1148,24 @@ void run()
         auto_workload = true;
     }
 
-    // TODO: clean this up
     IMGUI_CHECKVERSION();
-    auto *const ctx_ptr = ImGui::CreateContext();
+    ImGui::CreateContext();
+    SCOPE_EXIT([] { ImGui::DestroyContext(); });
+
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
-    if (!ImGui_ImplGlfw_InitForOpenGL(window.get(), true))
+
+    if (!ImGui_ImplGlfw_InitForOpenGL(window, true))
     {
-        ImGui::DestroyContext(ctx_ptr);
         throw std::runtime_error("ImGui: failed to initialize GLFW backend");
     }
+    SCOPE_EXIT([] { ImGui_ImplGlfw_Shutdown(); });
+
     if (!ImGui_ImplOpenGL3_Init("#version 130"))
     {
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext(ctx_ptr);
         throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
     }
-    const auto shutdown_imgui = [](ImGuiContext *ctx)
-    {
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext(ctx);
-    };
-    const std::unique_ptr<ImGuiContext, decltype(shutdown_imgui)> imgui_context(
-        ctx_ptr, shutdown_imgui);
+    SCOPE_EXIT([] { ImGui_ImplOpenGL3_Shutdown(); });
 
     int texture_width {320};
     int texture_height {240};
@@ -1256,7 +1274,7 @@ void run()
     float drag_source_mouse_x {};
     float drag_source_mouse_y {};
 
-    while (!glfwWindowShouldClose(window.get()))
+    while (!glfwWindowShouldClose(window))
     {
         window_state.scroll_offset = 0.0f;
         glfwPollEvents();
@@ -1269,7 +1287,7 @@ void run()
 
         double xpos {};
         double ypos {};
-        glfwGetCursorPos(window.get(), &xpos, &ypos);
+        glfwGetCursorPos(window, &xpos, &ypos);
         auto mouse_world_x =
             screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
                             viewport.x,
@@ -1285,7 +1303,7 @@ void run()
 
         if (!ImGui::GetIO().WantCaptureMouse)
         {
-            if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) ==
                 GLFW_PRESS)
             {
                 if (!dragging)
@@ -1333,19 +1351,18 @@ void run()
                 // thickness is constant in view space and therefore changes in
                 // world space
                 create_raster_geometry(scene, thickness, raster_geometry);
-                update_vertex_index_buffers(
-                    vao.get(), vbo.get(), raster_geometry);
+                update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
             }
         }
 
         if (!ImGui::GetIO().WantCaptureKeyboard)
         {
-            if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
+            if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
             {
                 sample_index = 0;
             }
 
-            if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
+            if (const auto p_state = glfwGetKey(window, GLFW_KEY_P);
                 p_state == GLFW_PRESS && !p_pressed)
             {
                 p_pressed = true;
@@ -1356,7 +1373,7 @@ void run()
                 p_pressed = false;
             }
 
-            if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
+            if (const auto s_state = glfwGetKey(window, GLFW_KEY_S);
                 s_state == GLFW_PRESS && !s_pressed)
             {
                 s_pressed = true;
@@ -1367,7 +1384,7 @@ void run()
                 s_pressed = false;
             }
 
-            if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
+            if (const auto l_state = glfwGetKey(window, GLFW_KEY_L);
                 l_state == GLFW_PRESS && !l_pressed)
             {
                 l_pressed = true;
@@ -1515,7 +1532,7 @@ void run()
 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        glfwSwapBuffers(window.get());
+        glfwSwapBuffers(window);
 
         ++num_frames;
         const double current_time {glfwGetTime()};
