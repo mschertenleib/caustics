@@ -77,7 +77,7 @@ target_link_libraries(caustics PRIVATE OpenGL::GL glfw imgui)
 # NOTE: this custom target is for always copying the shaders to the binary directory
 set(SHADERS
     src/trace.glsl
-    src/post.comp
+    src/post.glsl
     src/shader.vert
     src/line.frag
     src/circle.frag

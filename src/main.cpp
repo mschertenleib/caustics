@@ -91,6 +91,7 @@ namespace
     f(PFNGLFLUSHPROC, glFlush);                                                \
     f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
     f(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
+    f(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
     f(PFNGLGETSTRINGPROC, glGetString);
 
 // clang-format off
@@ -462,14 +463,6 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return create_program(shader.get());
 }
 
-[[nodiscard]] auto create_post_compute_program()
-{
-    const auto shader_code = read_file("post.comp");
-    const auto shader = create_shader(GL_COMPUTE_SHADER, shader_code.c_str());
-
-    return create_program(shader.get());
-}
-
 [[nodiscard]] auto create_trace_graphics_program(const Scene &scene)
 {
     const auto vertex_shader_code = read_file("fullscreen.vert");
@@ -486,6 +479,32 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     const auto header_str = header.str();
     const char *const sources[] {header_str.c_str(),
                                  fragment_shader_code.c_str()};
+    const auto fragment_shader =
+        create_shader(GL_FRAGMENT_SHADER, std::size(sources), sources);
+
+    return create_program(vertex_shader.get(), fragment_shader.get());
+}
+
+[[nodiscard]] auto create_post_compute_program()
+{
+    const auto shader_code = read_file("post.glsl");
+    constexpr auto header = "#version 430\n#define COMPUTE_SHADER\n";
+    const char *const sources[] {header, shader_code.c_str()};
+    const auto shader =
+        create_shader(GL_COMPUTE_SHADER, std::size(sources), sources);
+
+    return create_program(shader.get());
+}
+
+[[nodiscard]] auto create_post_graphics_program()
+{
+    const auto vertex_shader_code = read_file("fullscreen.vert");
+    const auto vertex_shader =
+        create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
+
+    const auto fragment_shader_code = read_file("post.glsl");
+    constexpr auto header = "#version 430\n";
+    const char *const sources[] {header, fragment_shader_code.c_str()};
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER, std::size(sources), sources);
 
@@ -1134,6 +1153,12 @@ void run()
     int texture_height {240};
     auto scene = create_scene(texture_width, texture_height);
 
+    const auto accumulation_texture =
+        create_accumulation_texture(texture_width, texture_height);
+
+    const auto target_texture =
+        create_target_texture(texture_width, texture_height);
+
 #define COMPUTE_SHADER
 
 #ifdef COMPUTE_SHADER
@@ -1158,17 +1183,21 @@ void run()
         glGetUniformLocation(trace_program.get(), "image_size");
 #endif
 
+#ifdef COMPUTE_SHADER
     const auto post_program = create_post_compute_program();
+#else
+    const auto post_program = create_post_graphics_program();
 
-    const auto accumulation_texture =
-        create_accumulation_texture(texture_width, texture_height);
+    const auto loc_image_size_post =
+        glGetUniformLocation(post_program.get(), "image_size");
 
-    const auto target_texture =
-        create_target_texture(texture_width, texture_height);
+    glUseProgram(post_program.get());
+    glUniform1ui(
+        glGetUniformLocation(post_program.get(), "accumulation_texture"), 0);
 
-#ifndef COMPUTE_SHADER
     const auto float_fbo = create_framebuffer(accumulation_texture.get());
 #endif
+
     const auto fbo = create_framebuffer(target_texture.get());
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1381,6 +1410,8 @@ void run()
             glUniform1ui(loc_samples_per_frame, samples_this_frame);
             glUniform2f(loc_view_position, scene.view_x, scene.view_y);
             glUniform2f(loc_view_size, scene.view_width, scene.view_height);
+
+#ifdef COMPUTE_SHADER
             unsigned int num_groups_x {
                 align_up(static_cast<unsigned int>(texture_width), 16) / 16,
             };
@@ -1388,8 +1419,12 @@ void run()
                 align_up(static_cast<unsigned int>(texture_height), 16) / 16,
             };
 
-#ifdef COMPUTE_SHADER
             glDispatchCompute(num_groups_x, num_groups_y, 1);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+            glUseProgram(post_program.get());
+            glDispatchCompute(num_groups_x, num_groups_y, 1);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 #else
             glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
             glUniform2ui(loc_image_size,
@@ -1405,23 +1440,26 @@ void run()
             glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
 
             glViewport(0, 0, texture_width, texture_height);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
 
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo.get());
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
+            glUseProgram(post_program.get());
+            glUniform2ui(loc_image_size_post,
+                         static_cast<unsigned int>(texture_width),
+                         static_cast<unsigned int>(texture_height));
+
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 #endif
 
             sample_index += samples_this_frame;
             sum_samples += samples_this_frame;
-
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-            glUseProgram(post_program.get());
-            glDispatchCompute(num_groups_x, num_groups_y, 1);
-
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         }
 
         glBlitFramebuffer(0,

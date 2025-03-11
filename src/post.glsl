@@ -1,9 +1,19 @@
-#version 430
+
+#ifdef COMPUTE_SHADER
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(rgba32f, binding = 0) uniform readonly restrict image2D accumulation_image;
 layout(rgba8, binding = 5) uniform writeonly restrict image2D target_image;
+
+#else
+
+uniform sampler2D accumulation_texture;
+uniform uvec2 image_size;
+out vec4 out_color;
+
+#endif
+
 
 // ACES tone mapping curve from Krzysztof Narkowicz
 // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
@@ -42,8 +52,18 @@ vec3 PBR_neutral_tone_map(vec3 color)
     return mix(color, new_peak * vec3(1.0, 1.0, 1.0), g);
 }
 
+vec3 tone_map(vec3 color)
+{
+#if 0
+    return PBR_neutral_tone_map(color);
+#else
+    return ACES_tone_map(color);
+#endif
+}
+
 void main()
 {
+#ifdef COMPUTE_SHADER
     const uvec2 image_size = imageSize(accumulation_image);
     if (gl_GlobalInvocationID.x >= image_size.x || gl_GlobalInvocationID.y >= image_size.y)
     {
@@ -51,11 +71,11 @@ void main()
     }
 
     vec4 color = imageLoad(accumulation_image, ivec2(gl_GlobalInvocationID.xy));
-#if 0
-    color.rgb = PBR_neutral_tone_map(color.rgb);
-#else
-    color.rgb = ACES_tone_map(color.rgb);
-#endif
-    color.a = clamp(color.a, 0.0, 1.0);
+    color = vec4(tone_map(color.rgb), 1.0);
     imageStore(target_image, ivec2(gl_GlobalInvocationID.xy), color);
+#else
+    const vec2 uv = vec2(gl_FragCoord.xy) / vec2(image_size);
+    const vec4 color = texture(accumulation_texture, uv);
+    out_color = vec4(tone_map(color.rgb), 1.0);
+#endif
 }
