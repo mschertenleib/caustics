@@ -45,6 +45,7 @@ namespace
     f(PFNGLGETPROGRAMIVPROC, glGetProgramiv);                                  \
     f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
     f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
+    f(PFNGLGETUNIFORMBLOCKINDEXPROC, glGetUniformBlockIndex);                  \
     f(PFNGLUNIFORM1IPROC, glUniform1i);                                        \
     f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
     f(PFNGLUNIFORM2UIPROC, glUniform2ui);                                      \
@@ -71,6 +72,7 @@ namespace
     f(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);                            \
     f(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);                      \
     f(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
+    f(PFNGLUNIFORMBLOCKBINDINGPROC, glUniformBlockBinding);                    \
     f(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);                    \
     f(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);            \
     f(PFNGLDRAWELEMENTSPROC, glDrawElements);                                  \
@@ -715,8 +717,7 @@ void update_vertex_buffer(GLuint vao,
 }
 
 template <typename T>
-[[nodiscard]] auto create_uniform_buffer(GLuint binding,
-                                         const std::vector<T> &data)
+[[nodiscard]] auto create_uniform_buffer(const std::vector<T> &data)
 {
     auto ubo = create_object(glGenBuffers, glDeleteBuffers);
 
@@ -735,7 +736,6 @@ template <typename T>
                  static_cast<GLsizeiptr>(data_size),
                  data.data(),
                  GL_STATIC_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, binding, ubo.get());
 
     return ubo;
 }
@@ -1094,7 +1094,6 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
-// #define IMGUI_IMPL_OPENGL_ES3
 #if defined(IMGUI_IMPL_OPENGL_ES3)
 #define NO_COMPUTE_SHADER
     // WebGL 2.0
@@ -1240,10 +1239,22 @@ void run()
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
 
-    const auto materials_ubo = create_uniform_buffer(1, scene.materials);
-    const auto circles_ubo = create_uniform_buffer(2, scene.circles);
-    const auto lines_ubo = create_uniform_buffer(3, scene.lines);
-    const auto arcs_ubo = create_uniform_buffer(4, scene.arcs);
+    const auto materials_ubo = create_uniform_buffer(scene.materials);
+    const auto circles_ubo = create_uniform_buffer(scene.circles);
+    const auto lines_ubo = create_uniform_buffer(scene.lines);
+    const auto arcs_ubo = create_uniform_buffer(scene.arcs);
+
+    const auto bind_ubo = [program = trace_program.get()](
+                              GLuint ubo, const char *name, GLuint binding)
+    {
+        const auto block_index = glGetUniformBlockIndex(program, name);
+        glUniformBlockBinding(program, block_index, binding);
+        glBindBufferBase(GL_UNIFORM_BUFFER, binding, ubo);
+    };
+    bind_ubo(materials_ubo.get(), "Materials", 1);
+    bind_ubo(circles_ubo.get(), "Circles", 2);
+    bind_ubo(lines_ubo.get(), "Lines", 3);
+    bind_ubo(arcs_ubo.get(), "Arcs", 4);
 
     const float thickness {0.0075f}; // In fraction of the view height
     Raster_geometry raster_geometry {};

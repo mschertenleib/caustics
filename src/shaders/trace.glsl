@@ -47,10 +47,11 @@ struct Hit
 #ifdef COMPUTE_SHADER
 layout(rgba32f, binding = 0) uniform restrict image2D accumulation_image;
 #endif
-layout(std140, binding = 1) uniform Materials { Material materials[MATERIAL_COUNT]; };
-layout(std140, binding = 2) uniform Circles { Circle circles[CIRCLE_COUNT]; };
-layout(std140, binding = 3) uniform Lines { Line lines[LINE_COUNT]; };
-layout(std140, binding = 4) uniform Arcs { Arc arcs[ARC_COUNT]; };
+
+layout(std140) uniform Materials { Material materials[MATERIAL_COUNT]; };
+layout(std140) uniform Circles { Circle circles[CIRCLE_COUNT]; };
+layout(std140) uniform Lines { Line lines[LINE_COUNT]; };
+layout(std140) uniform Arcs { Arc arcs[ARC_COUNT]; };
 
 
 uniform int sample_index;
