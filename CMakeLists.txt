@@ -53,8 +53,7 @@ target_sources(imgui PRIVATE
         ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
-target_include_directories(imgui SYSTEM
-        PUBLIC
+target_include_directories(imgui SYSTEM PUBLIC
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
 )
@@ -74,23 +73,9 @@ target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(caustics PRIVATE OpenGL::GL glfw imgui)
 
 
-# NOTE: this custom target is for always copying the shaders to the binary directory
-set(SHADERS
-    src/trace.glsl
-    src/post.glsl
-    src/shader.vert
-    src/line.frag
-    src/circle.frag
-    src/arc.frag
-    src/fullscreen.vert
+add_custom_target(shaders ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/shaders $<TARGET_FILE_DIR:caustics>/shaders
 )
-add_custom_target(shaders ALL DEPENDS ${SHADERS})
-foreach (SHADER IN LISTS SHADERS)
-    cmake_path(APPEND CMAKE_SOURCE_DIR ${SHADER} OUTPUT_VARIABLE SHADER)
-    add_custom_command(TARGET shaders POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy ${SHADER} $<TARGET_FILE_DIR:caustics>
-    )
-endforeach ()
 add_dependencies(caustics shaders)
 
 

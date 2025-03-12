@@ -477,7 +477,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
 
 [[nodiscard]] auto create_trace_compute_program(const Scene &scene)
 {
-    const auto shader_code = read_file("trace.glsl");
+    const auto shader_code = read_file("shaders/trace.glsl");
     std::ostringstream header;
     header << "#version 430\n"
            << "#define COMPUTE_SHADER\n"
@@ -495,11 +495,11 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
 
 [[nodiscard]] auto create_trace_graphics_program(const Scene &scene)
 {
-    const auto vertex_shader_code = read_file("fullscreen.vert");
+    const auto vertex_shader_code = read_file("shaders/fullscreen.vert");
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
 
-    const auto fragment_shader_code = read_file("trace.glsl");
+    const auto fragment_shader_code = read_file("shaders/trace.glsl");
     std::ostringstream header;
     header << "#version 430\n"
            << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
@@ -517,7 +517,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
 
 [[nodiscard]] auto create_post_compute_program()
 {
-    const auto shader_code = read_file("post.glsl");
+    const auto shader_code = read_file("shaders/post.glsl");
     constexpr auto header = "#version 430\n#define COMPUTE_SHADER\n";
     const char *const sources[] {header, shader_code.c_str()};
     const auto shader =
@@ -528,11 +528,11 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
 
 [[nodiscard]] auto create_post_graphics_program()
 {
-    const auto vertex_shader_code = read_file("fullscreen.vert");
+    const auto vertex_shader_code = read_file("shaders/fullscreen.vert");
     const auto vertex_shader =
         create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
 
-    const auto fragment_shader_code = read_file("post.glsl");
+    const auto fragment_shader_code = read_file("shaders/post.glsl");
     constexpr auto header = "#version 430\n";
     const char *const sources[] {header, fragment_shader_code.c_str()};
     const auto fragment_shader =
@@ -1242,10 +1242,11 @@ void run()
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(raster_geometry);
 
     const auto circle_program =
-        create_graphics_program("shader.vert", "circle.frag");
+        create_graphics_program("shaders/shader.vert", "shaders/circle.frag");
     const auto line_program =
-        create_graphics_program("shader.vert", "line.frag");
-    const auto arc_program = create_graphics_program("shader.vert", "arc.frag");
+        create_graphics_program("shaders/shader.vert", "shaders/line.frag");
+    const auto arc_program =
+        create_graphics_program("shaders/shader.vert", "shaders/arc.frag");
     const auto loc_view_position_draw_circle =
         glGetUniformLocation(circle_program.get(), "view_position");
     const auto loc_view_size_draw_circle =
