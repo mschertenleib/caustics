@@ -45,6 +45,7 @@ namespace
     f(PFNGLGETPROGRAMIVPROC, glGetProgramiv);                                  \
     f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
     f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
+    f(PFNGLUNIFORM1IPROC, glUniform1i);                                        \
     f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
     f(PFNGLUNIFORM2UIPROC, glUniform2ui);                                      \
     f(PFNGLUNIFORM1FPROC, glUniform1f);                                        \
@@ -1210,7 +1211,7 @@ void run()
         glGetUniformLocation(post_program.get(), "image_size");
 
     glUseProgram(post_program.get());
-    glUniform1ui(
+    glUniform1i(
         glGetUniformLocation(post_program.get(), "accumulation_texture"), 0);
 
     const auto float_fbo = create_framebuffer(accumulation_texture.get());
