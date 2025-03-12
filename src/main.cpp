@@ -1093,6 +1093,7 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
+    // #define COMPUTE_SHADER
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
@@ -1162,7 +1163,7 @@ void run()
     }
     SCOPE_EXIT([] { ImGui_ImplGlfw_Shutdown(); });
 
-    if (!ImGui_ImplOpenGL3_Init("#version 130"))
+    if (!ImGui_ImplOpenGL3_Init("#version 430"))
     {
         throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
     }
@@ -1177,8 +1178,6 @@ void run()
 
     const auto target_texture =
         create_target_texture(texture_width, texture_height);
-
-#define COMPUTE_SHADER
 
 #ifdef COMPUTE_SHADER
     const auto trace_program = create_trace_compute_program(scene);
@@ -1206,9 +1205,6 @@ void run()
     const auto post_program = create_post_compute_program();
 #else
     const auto post_program = create_post_graphics_program();
-
-    const auto loc_image_size_post =
-        glGetUniformLocation(post_program.get(), "image_size");
 
     glUseProgram(post_program.get());
     glUniform1i(
@@ -1466,9 +1462,6 @@ void run()
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
             glUseProgram(post_program.get());
-            glUniform2ui(loc_image_size_post,
-                         static_cast<unsigned int>(texture_width),
-                         static_cast<unsigned int>(texture_height));
 
             glDrawArrays(GL_TRIANGLES, 0, 3);
 

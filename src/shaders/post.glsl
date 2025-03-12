@@ -9,7 +9,6 @@ layout(rgba8, binding = 5) uniform writeonly restrict image2D target_image;
 #else
 
 uniform sampler2D accumulation_texture;
-uniform uvec2 image_size;
 out vec4 out_color;
 
 #endif
@@ -74,8 +73,7 @@ void main()
     color = vec4(tone_map(color.rgb), 1.0);
     imageStore(target_image, ivec2(gl_GlobalInvocationID.xy), color);
 #else
-    const vec2 uv = vec2(gl_FragCoord.xy) / vec2(image_size);
-    const vec4 color = texture(accumulation_texture, uv);
+    const vec4 color = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
     out_color = vec4(tone_map(color.rgb), 1.0);
 #endif
 }
