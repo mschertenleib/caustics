@@ -1,4 +1,3 @@
-#version 430
 
 in vec4 local;
 in vec3 color;

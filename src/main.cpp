@@ -448,11 +448,6 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return shader;
 }
 
-[[nodiscard]] auto create_shader(GLenum type, const char *code)
-{
-    return create_shader(type, 1, &code);
-}
-
 [[nodiscard]] auto create_program(auto &&...shaders)
 {
     auto program = create_object(glCreateProgram, glDeleteProgram);
@@ -476,11 +471,12 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return program;
 }
 
-[[nodiscard]] auto create_trace_compute_program(const Scene &scene)
+[[nodiscard]] auto create_trace_compute_program(const char *glsl_version,
+                                                const Scene &scene)
 {
     const auto shader_code = read_file("shaders/trace.glsl");
     std::ostringstream header;
-    header << "#version 430\n"
+    header << glsl_version << '\n'
            << "#define COMPUTE_SHADER\n"
            << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
            << "#define CIRCLE_COUNT " << scene.circles.size() << '\n'
@@ -494,67 +490,72 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return create_program(shader.get());
 }
 
-[[nodiscard]] auto create_trace_graphics_program(const Scene &scene)
+[[nodiscard]] auto create_trace_graphics_program(const char *glsl_version,
+                                                 const Scene &scene)
 {
     const auto vertex_shader_code = read_file("shaders/fullscreen.vert");
-    const auto vertex_shader =
-        create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
+    const char *const vertex_shader_sources[] {
+        glsl_version, "\n", vertex_shader_code.c_str()};
+    const auto vertex_shader = create_shader(GL_VERTEX_SHADER,
+                                             std::size(vertex_shader_sources),
+                                             vertex_shader_sources);
 
     const auto fragment_shader_code = read_file("shaders/trace.glsl");
     std::ostringstream header;
-    header << "#version 430\n"
+    header << glsl_version << '\n'
            << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
            << "#define CIRCLE_COUNT " << scene.circles.size() << '\n'
            << "#define LINE_COUNT " << scene.lines.size() << '\n'
            << "#define ARC_COUNT " << scene.arcs.size() << '\n';
     const auto header_str = header.str();
-    const char *const sources[] {header_str.c_str(),
-                                 fragment_shader_code.c_str()};
+    const char *const fragment_shader_sources[] {header_str.c_str(),
+                                                 fragment_shader_code.c_str()};
     const auto fragment_shader =
-        create_shader(GL_FRAGMENT_SHADER, std::size(sources), sources);
+        create_shader(GL_FRAGMENT_SHADER,
+                      std::size(fragment_shader_sources),
+                      fragment_shader_sources);
 
     return create_program(vertex_shader.get(), fragment_shader.get());
 }
 
-[[nodiscard]] auto create_post_compute_program()
+[[nodiscard]] auto create_post_compute_program(const char *glsl_version)
 {
     const auto shader_code = read_file("shaders/post.glsl");
-    constexpr auto header = "#version 430\n#define COMPUTE_SHADER\n";
-    const char *const sources[] {header, shader_code.c_str()};
+    const char *const sources[] {
+        glsl_version, "\n#define COMPUTE_SHADER\n", shader_code.c_str()};
     const auto shader =
         create_shader(GL_COMPUTE_SHADER, std::size(sources), sources);
 
     return create_program(shader.get());
 }
 
-[[nodiscard]] auto create_post_graphics_program()
+[[nodiscard]] auto
+create_graphics_program(const char *glsl_version,
+                        const char *vertex_shader_file_name,
+                        const char *fragment_shader_file_name)
 {
-    const auto vertex_shader_code = read_file("shaders/fullscreen.vert");
-    const auto vertex_shader =
-        create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
+    const auto vertex_shader_code = read_file(vertex_shader_file_name);
+    const char *const vertex_shader_sources[] {
+        glsl_version, "\n", vertex_shader_code.c_str()};
+    const auto vertex_shader = create_shader(GL_VERTEX_SHADER,
+                                             std::size(vertex_shader_sources),
+                                             vertex_shader_sources);
 
-    const auto fragment_shader_code = read_file("shaders/post.glsl");
-    constexpr auto header = "#version 430\n";
-    const char *const sources[] {header, fragment_shader_code.c_str()};
+    const auto fragment_shader_code = read_file(fragment_shader_file_name);
+    const char *const fragment_shader_sources[] {
+        glsl_version, "\n", fragment_shader_code.c_str()};
     const auto fragment_shader =
-        create_shader(GL_FRAGMENT_SHADER, std::size(sources), sources);
+        create_shader(GL_FRAGMENT_SHADER,
+                      std::size(fragment_shader_sources),
+                      fragment_shader_sources);
 
     return create_program(vertex_shader.get(), fragment_shader.get());
 }
 
-[[nodiscard]] auto
-create_graphics_program(const char *vertex_shader_file_name,
-                        const char *fragment_shader_file_name)
+[[nodiscard]] auto create_post_graphics_program(const char *glsl_version)
 {
-    const auto vertex_shader_code = read_file(vertex_shader_file_name);
-    const auto vertex_shader =
-        create_shader(GL_VERTEX_SHADER, vertex_shader_code.c_str());
-
-    const auto fragment_shader_code = read_file(fragment_shader_file_name);
-    const auto fragment_shader =
-        create_shader(GL_FRAGMENT_SHADER, fragment_shader_code.c_str());
-
-    return create_program(vertex_shader.get(), fragment_shader.get());
+    return create_graphics_program(
+        glsl_version, "shaders/fullscreen.vert", "shaders/post.glsl");
 }
 
 [[nodiscard]] auto create_accumulation_texture(GLsizei width, GLsizei height)
@@ -1093,10 +1094,26 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
-    // #define COMPUTE_SHADER
+#if defined(IMGUI_IMPL_OPENGL_ES3)
+#define NO_COMPUTE_SHADER
+    // WebGL 2.0
+    constexpr auto glsl_version = "#version 300 es";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+#else
+#if 0
+#define NO_COMPUTE_SHADER // For testing
+#endif
+    constexpr auto glsl_version = "#version 430 core";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_DEBUG, 1);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
+
+    glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
 
     const auto window =
         glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
@@ -1163,7 +1180,7 @@ void run()
     }
     SCOPE_EXIT([] { ImGui_ImplGlfw_Shutdown(); });
 
-    if (!ImGui_ImplOpenGL3_Init("#version 430"))
+    if (!ImGui_ImplOpenGL3_Init(glsl_version))
     {
         throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
     }
@@ -1179,12 +1196,16 @@ void run()
     const auto target_texture =
         create_target_texture(texture_width, texture_height);
 
-#ifdef COMPUTE_SHADER
-    const auto trace_program = create_trace_compute_program(scene);
+#ifndef NO_COMPUTE_SHADER
+    const auto trace_program =
+        create_trace_compute_program(glsl_version, scene);
 #else
-    const auto trace_program = create_trace_graphics_program(scene);
+    const auto trace_program =
+        create_trace_graphics_program(glsl_version, scene);
     const auto empty_vao =
         create_object(glGenVertexArrays, glDeleteVertexArrays);
+    const auto loc_image_size =
+        glGetUniformLocation(trace_program.get(), "image_size");
 #endif
 
     const auto loc_sample_index =
@@ -1196,15 +1217,10 @@ void run()
     const auto loc_view_size =
         glGetUniformLocation(trace_program.get(), "view_size");
 
-#ifndef COMPUTE_SHADER
-    const auto loc_image_size =
-        glGetUniformLocation(trace_program.get(), "image_size");
-#endif
-
-#ifdef COMPUTE_SHADER
-    const auto post_program = create_post_compute_program();
+#ifndef NO_COMPUTE_SHADER
+    const auto post_program = create_post_compute_program(glsl_version);
 #else
-    const auto post_program = create_post_graphics_program();
+    const auto post_program = create_post_graphics_program(glsl_version);
 
     glUseProgram(post_program.get());
     glUniform1i(
@@ -1238,12 +1254,12 @@ void run()
     // with a new size (when adding or removing objects).
     const auto [vao, vbo, ibo] = create_vertex_index_buffers(raster_geometry);
 
-    const auto circle_program =
-        create_graphics_program("shaders/shader.vert", "shaders/circle.frag");
-    const auto line_program =
-        create_graphics_program("shaders/shader.vert", "shaders/line.frag");
-    const auto arc_program =
-        create_graphics_program("shaders/shader.vert", "shaders/arc.frag");
+    const auto circle_program = create_graphics_program(
+        glsl_version, "shaders/shader.vert", "shaders/circle.frag");
+    const auto line_program = create_graphics_program(
+        glsl_version, "shaders/shader.vert", "shaders/line.frag");
+    const auto arc_program = create_graphics_program(
+        glsl_version, "shaders/shader.vert", "shaders/arc.frag");
     const auto loc_view_position_draw_circle =
         glGetUniformLocation(circle_program.get(), "view_position");
     const auto loc_view_size_draw_circle =
@@ -1426,7 +1442,7 @@ void run()
             glUniform2f(loc_view_position, scene.view_x, scene.view_y);
             glUniform2f(loc_view_size, scene.view_width, scene.view_height);
 
-#ifdef COMPUTE_SHADER
+#ifndef NO_COMPUTE_SHADER
             unsigned int num_groups_x {
                 align_up(static_cast<unsigned int>(texture_width), 16) / 16,
             };
