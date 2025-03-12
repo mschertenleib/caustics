@@ -1,4 +1,6 @@
 
+precision highp float;
+
 void main()
 {
     const vec2 coords[] = vec2[](

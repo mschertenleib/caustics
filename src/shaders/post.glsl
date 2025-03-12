@@ -1,4 +1,6 @@
 
+precision highp float;
+
 #ifdef COMPUTE_SHADER
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
@@ -33,21 +35,21 @@ vec3 PBR_neutral_tone_map(vec3 color)
     const float start_compression = 0.8 - 0.04;
     const float desaturation = 0.15;
 
-    const float x = min(color.r, min(color.g, color.b));
-    const float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
     color -= offset;
 
-    const float peak = max(color.r, max(color.g, color.b));
+    float peak = max(color.r, max(color.g, color.b));
     if (peak < start_compression)
     {
         return color;
     }
 
     const float d = 1.0 - start_compression;
-    const float new_peak = 1.0 - d * d / (peak + d - start_compression);
+    float new_peak = 1.0 - d * d / (peak + d - start_compression);
     color *= new_peak / peak;
 
-    const float g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    float g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
     return mix(color, new_peak * vec3(1.0, 1.0, 1.0), g);
 }
 
@@ -63,7 +65,7 @@ vec3 tone_map(vec3 color)
 void main()
 {
 #ifdef COMPUTE_SHADER
-    const uvec2 image_size = imageSize(accumulation_image);
+    uvec2 image_size = imageSize(accumulation_image);
     if (gl_GlobalInvocationID.x >= image_size.x || gl_GlobalInvocationID.y >= image_size.y)
     {
         return;
@@ -73,7 +75,7 @@ void main()
     color = vec4(tone_map(color.rgb), 1.0);
     imageStore(target_image, ivec2(gl_GlobalInvocationID.xy), color);
 #else
-    const vec4 color = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
+    vec4 color = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
     out_color = vec4(tone_map(color.rgb), 1.0);
 #endif
 }

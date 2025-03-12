@@ -1,4 +1,6 @@
 
+precision highp float;
+
 in vec4 local;
 in vec3 color;
 
@@ -12,7 +14,7 @@ void main()
         dist = min(length(local.xy), length(local.xz));
     }
     // NOTE: this assumes that the local x, y and z have the same scale
-    const float pixel_size = fwidth(local.x);
-    const float alpha = clamp((0.5 - dist) / pixel_size, 0.0, 1.0);
+    float pixel_size = fwidth(local.x);
+    float alpha = clamp((0.5 - dist) / pixel_size, 0.0, 1.0);
     frag_color = vec4(color, alpha);
 }

@@ -1094,6 +1094,7 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
+// #define IMGUI_IMPL_OPENGL_ES3
 #if defined(IMGUI_IMPL_OPENGL_ES3)
 #define NO_COMPUTE_SHADER
     // WebGL 2.0
@@ -1437,8 +1438,9 @@ void run()
             const auto samples_this_frame =
                 std::min(samples_per_frame, max_samples - sample_index);
             glUseProgram(trace_program.get());
-            glUniform1ui(loc_sample_index, sample_index);
-            glUniform1ui(loc_samples_per_frame, samples_this_frame);
+            glUniform1i(loc_sample_index, static_cast<int>(sample_index));
+            glUniform1i(loc_samples_per_frame,
+                        static_cast<int>(samples_this_frame));
             glUniform2f(loc_view_position, scene.view_x, scene.view_y);
             glUniform2f(loc_view_size, scene.view_width, scene.view_height);
 
