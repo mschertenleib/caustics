@@ -2,4 +2,4 @@
 
 2D path tracing
 
-![](image.png)
+![image.png](image.png)
