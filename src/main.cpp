@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -747,19 +748,36 @@ template <typename T>
     return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
-void save_as_png(const char *file_name, int width, int height)
+void save_as_png(const char *file_name, int width, int height, GLuint texture)
 {
     std::cout << "Saving " << width << " x " << height << " image to \""
               << file_name << "\"\n";
 
     glFinish();
+    glBindTexture(GL_TEXTURE_2D, texture);
 
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
-                                     static_cast<std::size_t>(height) * 4);
+    const int channels {4};
+    const auto size_horizontal =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
+    const auto size_vertical = static_cast<std::size_t>(height);
+
+    std::vector<std::uint8_t> pixels(size_horizontal * size_vertical);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
-    const auto write_result =
-        stbi_write_png(file_name, width, height, 4, pixels.data(), width * 4);
+    // Flip the image vertically since the OpenGL image origin is in the
+    // bottom-left corner.
+    std::vector<std::uint8_t> tmp_row(size_horizontal);
+    for (std::size_t i {0}; i < size_vertical / 2; ++i)
+    {
+        auto *const top = &pixels[i * size_horizontal];
+        auto *const bottom = &pixels[(size_vertical - 1 - i) * size_horizontal];
+        std::memcpy(tmp_row.data(), top, size_horizontal);
+        std::memcpy(top, bottom, size_horizontal);
+        std::memcpy(bottom, tmp_row.data(), size_horizontal);
+    }
+
+    const auto write_result = stbi_write_png(
+        file_name, width, height, channels, pixels.data(), width * channels);
     if (write_result == 0)
     {
         std::ostringstream message;
@@ -1392,7 +1410,10 @@ void run()
                 p_state == GLFW_PRESS && !p_pressed)
             {
                 p_pressed = true;
-                save_as_png("image.png", texture_width, texture_height);
+                save_as_png("image.png",
+                            texture_width,
+                            texture_height,
+                            target_texture.get());
             }
             else if (p_state == GLFW_RELEASE)
             {
