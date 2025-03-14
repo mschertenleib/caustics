@@ -11,6 +11,7 @@
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -99,9 +100,69 @@ namespace
     f(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
     f(PFNGLGETSTRINGPROC, glGetString);
 
+PFNGLGETERRORPROC glGetError {nullptr};
+
+#if 0
+
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
 // clang-format on
+
+#else
+
+template <typename T>
+struct GL_function;
+
+template <typename R, typename... Args>
+struct GL_function<R (*)(Args...)>
+{
+    R operator()(Args... args) const
+    {
+        if constexpr (std::is_void_v<R>)
+        {
+            function(args...);
+            check();
+        }
+        else
+        {
+            R result {function(args...)};
+            check();
+            return result;
+        }
+    }
+
+    void check() const
+    {
+        const auto error = glGetError();
+        if (error == GL_NO_ERROR)
+        {
+            return;
+        }
+
+        std::cerr << "OpenGL error: ";
+        switch (error)
+        {
+        case GL_INVALID_ENUM: std::cerr << "GL_INVALID_ENUM"; break;
+        case GL_INVALID_VALUE: std::cerr << "GL_INVALID_VALUE"; break;
+        case GL_INVALID_OPERATION: std::cerr << "GL_INVALID_OPERATION"; break;
+        case GL_INVALID_FRAMEBUFFER_OPERATION:
+            std::cerr << "GL_INVALID_FRAMEBUFFER_OPERATION";
+            break;
+        case GL_OUT_OF_MEMORY: std::cerr << "GL_OUT_OF_MEMORY"; break;
+        case GL_STACK_UNDERFLOW: std::cerr << "GL_STACK_UNDERFLOW"; break;
+        case GL_STACK_OVERFLOW: std::cerr << "GL_STACK_OVERFLOW"; break;
+        default: std::cerr << "unknown"; break;
+        }
+        std::cerr << "\n";
+    }
+
+    R (*function)(Args...);
+};
+// clang-format off
+#define DECLARE_GL_FUNCTION(type, name) GL_function<type> name {nullptr}
+// clang-format on
+
+#endif
 
 ENUMERATE_GL_FUNCTIONS(DECLARE_GL_FUNCTION)
 
@@ -193,27 +254,39 @@ private:
 
 [[nodiscard]] auto create_object(GLuint (*create)(), void (*destroy)(GLuint))
 {
-    assert(create);
-    assert(destroy);
-
     return GL_object(create(), destroy);
 }
 
 [[nodiscard]] auto
 create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
 {
-    assert(create);
-    assert(destroy);
-
     return GL_object(create(arg), destroy);
 }
 
 [[nodiscard]] auto create_object(void (*create)(GLsizei, GLuint *),
                                  void (*destroy)(GLsizei, const GLuint *))
 {
-    assert(create);
-    assert(destroy);
+    GLuint object {};
+    create(1, &object);
+    return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
+}
 
+template <std::invocable C, std::invocable<GLuint> D>
+[[nodiscard]] auto create_object(C &&create, D &&destroy)
+{
+    return GL_object(create(), destroy);
+}
+
+template <std::invocable<GLenum> C, std::invocable<GLuint> D>
+[[nodiscard]] auto create_object(C &&create, GLenum arg, D &&destroy)
+{
+    return GL_object(create(arg), destroy);
+}
+
+template <std::invocable<GLsizei, GLuint *> C,
+          std::invocable<GLsizei, const GLuint *> D>
+[[nodiscard]] auto create_object(C &&create, D &&destroy)
+{
     GLuint object {};
     create(1, &object);
     return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
@@ -365,11 +438,17 @@ void glfw_scroll_callback(GLFWwindow *window,
 
 void load_gl_functions()
 {
-#define LOAD_GL_FUNCTION(type, name)                                           \
+/*#define LOAD_GL_FUNCTION(type, name) \
     name = reinterpret_cast<type>(glfwGetProcAddress(#name));                  \
-    assert(name != nullptr)
+    assert(name != nullptr)*/
+#define LOAD_GL_FUNCTION(type, name)                                           \
+    name.function = reinterpret_cast<type>(glfwGetProcAddress(#name));         \
+    assert(name.function != nullptr)
 
     ENUMERATE_GL_FUNCTIONS(LOAD_GL_FUNCTION)
+
+    glGetError =
+        reinterpret_cast<PFNGLGETERRORPROC>(glfwGetProcAddress("glGetError"));
 
 #undef LOAD_GL_FUNCTION
 }
@@ -598,8 +677,6 @@ create_graphics_program(const char *glsl_version,
                  GL_RGBA,
                  GL_FLOAT,
                  nullptr);
-    glBindImageTexture(
-        0, texture.get(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 
     return texture;
 }
@@ -622,8 +699,6 @@ create_graphics_program(const char *glsl_version,
                  GL_RGBA,
                  GL_UNSIGNED_BYTE,
                  nullptr);
-    glBindImageTexture(
-        5, texture.get(), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
     return texture;
 }
@@ -1131,7 +1206,9 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
-#if defined(IMGUI_IMPL_OPENGL_ES3)
+    // #define TARGET_WEB
+
+#if defined(TARGET_WEB)
 #define NO_COMPUTE_SHADER
     // WebGL 2.0
     constexpr auto glsl_version = "#version 300 es";
@@ -1148,9 +1225,8 @@ void run()
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-
     glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
+#endif
 
     const auto window =
         glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
@@ -1180,15 +1256,29 @@ void run()
 
     load_gl_functions();
 
-    std::cout << "Extensions:\n";
-    for (const auto &extension : get_all_extensions())
+#ifdef TARGET_WEB
+    constexpr const char *required_extensions[] {"GL_OES_texture_float",
+                                                 "GL_EXT_color_buffer_float"};
+    const auto supported_extensions = get_all_extensions();
+    for (const char *const required_extension : required_extensions)
     {
-        std::cout << "    " << extension << '\n';
+        if (std::none_of(
+                supported_extensions.cbegin(),
+                supported_extensions.cend(),
+                [required_extension](const char *extension)
+                { return std::strcmp(extension, required_extension) == 0; }))
+        {
+            std::ostringstream message;
+            message << "Extension " << required_extension
+                    << " is not supported ";
+            throw std::runtime_error(message.str());
+        }
     }
-
+#else
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     glDebugMessageCallback(&gl_debug_callback, nullptr);
+#endif
 
     const std::string_view renderer(
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
@@ -1235,9 +1325,22 @@ void run()
 
     const auto accumulation_texture =
         create_accumulation_texture(texture_width, texture_height);
+#ifndef NO_COMPUTE_SHADER
+    glBindImageTexture(0,
+                       accumulation_texture.get(),
+                       0,
+                       GL_FALSE,
+                       0,
+                       GL_READ_WRITE,
+                       GL_RGBA32F);
+#endif
 
     const auto target_texture =
         create_target_texture(texture_width, texture_height);
+#ifndef NO_COMPUTE_SHADER
+    glBindImageTexture(
+        5, target_texture.get(), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+#endif
 
 #ifndef NO_COMPUTE_SHADER
     const auto trace_program =
