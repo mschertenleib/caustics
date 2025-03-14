@@ -102,7 +102,7 @@ namespace
 
 PFNGLGETERRORPROC glGetError {nullptr};
 
-#if 0
+#ifndef TARGET_WEB
 
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
@@ -110,36 +110,11 @@ PFNGLGETERRORPROC glGetError {nullptr};
 
 #else
 
-template <typename T>
-struct GL_function;
-
-template <typename R, typename... Args>
-struct GL_function<R (*)(Args...)>
+void check_gl_error()
 {
-    R operator()(Args... args) const
+    GLenum error {};
+    while ((error = glGetError()) != GL_NO_ERROR)
     {
-        if constexpr (std::is_void_v<R>)
-        {
-            function(args...);
-            check();
-        }
-        else
-        {
-            R result {function(args...)};
-            check();
-            return result;
-        }
-    }
-
-    void check() const
-    {
-        const auto error = glGetError();
-        if (error == GL_NO_ERROR)
-        {
-            return;
-        }
-
-        std::cerr << "OpenGL error: ";
         switch (error)
         {
         case GL_INVALID_ENUM: std::cerr << "GL_INVALID_ENUM"; break;
@@ -154,6 +129,28 @@ struct GL_function<R (*)(Args...)>
         default: std::cerr << "unknown"; break;
         }
         std::cerr << "\n";
+    }
+}
+
+template <typename T>
+struct GL_function;
+
+template <typename R, typename... Args>
+struct GL_function<R (*)(Args...)>
+{
+    R operator()(Args... args) const
+    {
+        if constexpr (std::is_void_v<R>)
+        {
+            function(args...);
+            check_gl_error();
+        }
+        else
+        {
+            R result {function(args...)};
+            check_gl_error();
+            return result;
+        }
     }
 
     R (*function)(Args...);
@@ -252,7 +249,7 @@ private:
     Destroy m_destroy;
 };
 
-[[nodiscard]] auto create_object(GLuint (*create)(), void (*destroy)(GLuint))
+/*[[nodiscard]] auto create_object(GLuint (*create)(), void (*destroy)(GLuint))
 {
     return GL_object(create(), destroy);
 }
@@ -269,7 +266,7 @@ create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
     GLuint object {};
     create(1, &object);
     return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
-}
+}*/
 
 template <std::invocable C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, D &&destroy)
@@ -438,12 +435,15 @@ void glfw_scroll_callback(GLFWwindow *window,
 
 void load_gl_functions()
 {
-/*#define LOAD_GL_FUNCTION(type, name) \
-    name = reinterpret_cast<type>(glfwGetProcAddress(#name));                  \
-    assert(name != nullptr)*/
+#ifdef TARGET_WEB
 #define LOAD_GL_FUNCTION(type, name)                                           \
     name.function = reinterpret_cast<type>(glfwGetProcAddress(#name));         \
     assert(name.function != nullptr)
+#else
+#define LOAD_GL_FUNCTION(type, name)                                           \
+    name = reinterpret_cast<type>(glfwGetProcAddress(#name));                  \
+    assert(name != nullptr)
+#endif
 
     ENUMERATE_GL_FUNCTIONS(LOAD_GL_FUNCTION)
 
@@ -1205,8 +1205,6 @@ void run()
         throw std::runtime_error("Failed to initialize GLFW");
     }
     SCOPE_EXIT([] { glfwTerminate(); });
-
-    // #define TARGET_WEB
 
 #if defined(TARGET_WEB)
 #define NO_COMPUTE_SHADER
