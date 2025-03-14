@@ -91,6 +91,7 @@ namespace
     f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);                    \
     f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
+    f(PFNGLGETSTRINGIPROC, glGetStringi);                                      \
     f(PFNGLFINISHPROC, glFinish);                                              \
     f(PFNGLFLUSHPROC, glFlush);                                                \
     f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
@@ -387,6 +388,24 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
         return;
     }
     std::cerr << message << '\n';
+}
+
+[[nodiscard]] std::vector<const char *> get_all_extensions()
+{
+    int num_extensions {};
+    glGetIntegerv(GL_NUM_EXTENSIONS, &num_extensions);
+
+    std::vector<const char *> extensions;
+    extensions.reserve(static_cast<std::size_t>(num_extensions));
+
+    for (int i {0}; i < num_extensions; ++i)
+    {
+        const auto *const str =
+            glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
+        extensions.push_back(reinterpret_cast<const char *>(str));
+    }
+
+    return extensions;
 }
 
 [[nodiscard]] std::string read_file(const char *file_name)
@@ -1160,6 +1179,12 @@ void run()
     glfwSwapInterval(1);
 
     load_gl_functions();
+
+    std::cout << "Extensions:\n";
+    for (const auto &extension : get_all_extensions())
+    {
+        std::cout << "    " << extension << '\n';
+    }
 
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
