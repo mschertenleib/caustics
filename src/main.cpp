@@ -11,6 +11,10 @@
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -18,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -30,6 +35,14 @@
 
 namespace
 {
+
+#ifdef __EMSCRIPTEN__
+std::function<void()> emscripten_main_loop_f;
+void emscripten_main_loop()
+{
+    emscripten_main_loop_f();
+}
+#endif
 
 #define ENUMERATE_GL_FUNCTIONS(f)                                              \
     f(PFNGLENABLEPROC, glEnable);                                              \
@@ -1226,7 +1239,7 @@ void run()
     glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
 #endif
 
-    const auto window =
+    auto *const window =
         glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
     if (window == nullptr)
     {
@@ -1280,13 +1293,14 @@ void run()
 
     const std::string_view renderer(
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
-    std::cout << "Renderer: \"" << renderer << "\", ";
-    bool auto_workload {};
+    std::cout << "Renderer: \"" << renderer << "\"\n";
+
+    bool auto_workload {false};
+#ifndef TARGET_WEB
     if (renderer.find("Mesa") != std::string_view::npos &&
         renderer.find("Intel") != std::string_view::npos)
     {
-        std::cout << "disabling adaptive workload\n";
-        auto_workload = false;
+        std::cout << "Disabling adaptive workload\n";
         // FIXME: this is just to get some decent performance, but we should
         // really find a way to activate V-Sync even when timer queries do not
         // work.
@@ -1294,9 +1308,10 @@ void run()
     }
     else
     {
-        std::cout << "enabling adaptive workload\n";
+        std::cout << "Enabling adaptive workload\n";
         auto_workload = true;
     }
+#endif
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1310,6 +1325,10 @@ void run()
         throw std::runtime_error("ImGui: failed to initialize GLFW backend");
     }
     SCOPE_EXIT([] { ImGui_ImplGlfw_Shutdown(); });
+
+#ifdef __EMSCRIPTEN__
+    ImGui_ImplGlfw_InstallEmscriptenCallbacks(window, "#canvas");
+#endif
 
     if (!ImGui_ImplOpenGL3_Init(glsl_version))
     {
@@ -1444,8 +1463,15 @@ void run()
     float drag_source_mouse_x {};
     float drag_source_mouse_y {};
 
+#ifdef __EMSCRIPTEN__
+    ImGui::GetIO().IniFilename = nullptr;
+    emscripten_main_loop_f =
+        [&]
+    {
+#else
     while (!glfwWindowShouldClose(window))
     {
+#endif
         window_state.scroll_offset = 0.0f;
         glfwPollEvents();
 
@@ -1740,6 +1766,10 @@ void run()
                 static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
         }
     }
+#ifdef __EMSCRIPTEN__
+    ;
+    emscripten_set_main_loop(emscripten_main_loop, 0, true);
+#endif
 }
 
 } // namespace

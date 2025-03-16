@@ -38,7 +38,7 @@ CPMAddPackage(
 
 CPMAddPackage(
         GITHUB_REPOSITORY ocornut/imgui
-        GIT_TAG v1.90.3
+        GIT_TAG v1.91.9
         DOWNLOAD_ONLY YES
 )
 add_library(imgui STATIC)
