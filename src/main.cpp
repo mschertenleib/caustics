@@ -8,17 +8,13 @@
 #include <stb_image_write.h>
 
 #ifdef __EMSCRIPTEN__
+#include <emscripten.h>
 #define GLFW_INCLUDE_ES3
 #else
 #define GLFW_INCLUDE_GLCOREARB
 #endif
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
-
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#define TARGET_WEB
-#endif
 
 #include <algorithm>
 #include <cassert>
@@ -119,7 +115,7 @@ void emscripten_main_loop()
     f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
     f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
 #define ENUMERATE_GL_FUNCTIONS(f)                                              \
     ENUMERATE_GL_FUNCTIONS_COMMON(f) ENUMERATE_GL_FUNCTIONS_430(f)
 #else
@@ -128,7 +124,7 @@ void emscripten_main_loop()
 
 PFNGLGETERRORPROC glGetError {nullptr};
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
 
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
@@ -460,7 +456,7 @@ void glfw_scroll_callback(GLFWwindow *window,
 
 void load_gl_functions()
 {
-#ifdef TARGET_WEB
+#ifdef __EMSCRIPTEN__
 #define LOAD_GL_FUNCTION(type, name)                                           \
     name.function = reinterpret_cast<type>(glfwGetProcAddress(#name));         \
     assert(name.function != nullptr)
@@ -478,7 +474,7 @@ void load_gl_functions()
 #undef LOAD_GL_FUNCTION
 }
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
 void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                 GLenum type,
                                 [[maybe_unused]] GLuint id,
@@ -599,7 +595,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return program;
 }
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
 [[nodiscard]] auto create_trace_compute_program(const char *glsl_version,
                                                 const Scene &scene)
 {
@@ -648,7 +644,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return create_program(vertex_shader.get(), fragment_shader.get());
 }
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
 [[nodiscard]] auto create_post_compute_program(const char *glsl_version)
 {
     const auto shader_code = read_file("shaders/post.glsl");
@@ -762,7 +758,7 @@ create_graphics_program(const char *glsl_version,
         case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
             oss << "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
             break;
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
         case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
             oss << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
             break;
@@ -875,7 +871,7 @@ template <typename T>
     return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
 void save_as_png(const char *file_name, int width, int height, GLuint texture)
 {
     std::cout << "Saving " << width << " x " << height << " image to \""
@@ -1241,7 +1237,7 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
-#ifdef TARGET_WEB
+#ifdef __EMSCRIPTEN__
 #define NO_COMPUTE_SHADER
     // WebGL 2.0
     constexpr auto glsl_version = "#version 300 es";
@@ -1289,7 +1285,7 @@ void run()
 
     load_gl_functions();
 
-#ifdef TARGET_WEB
+#ifdef __EMSCRIPTEN__
     constexpr const char *required_extensions[] {"GL_EXT_color_buffer_float"};
     const auto supported_extensions = get_all_extensions();
     for (const char *const required_extension : required_extensions)
@@ -1316,7 +1312,7 @@ void run()
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
     std::cout << "Renderer: \"" << renderer << "\"\n";
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
     bool auto_workload {false};
     if (renderer.find("Mesa") != std::string_view::npos &&
         renderer.find("Intel") != std::string_view::npos)
@@ -1420,7 +1416,7 @@ void run()
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
 #endif
@@ -1586,7 +1582,7 @@ void run()
             {
                 p_pressed = true;
 // FIXME
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
                 save_as_png("image.png",
                             texture_width,
                             texture_height,
@@ -1634,7 +1630,7 @@ void run()
         ImGui::ShowDemoWindow();
         ImGui::Render();
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
         if (auto_workload)
         {
             glQueryCounter(query_start.get(), GL_TIMESTAMP);
@@ -1750,7 +1746,7 @@ void run()
             reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
                                      sizeof(std::uint32_t)));
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
         if (auto_workload)
         {
             glQueryCounter(query_end.get(), GL_TIMESTAMP);
@@ -1773,7 +1769,7 @@ void run()
             sum_samples = 0;
         }
 
-#ifndef TARGET_WEB
+#ifndef __EMSCRIPTEN__
         // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
         // Intel with Mesa drivers return non-sense numbers, rendering them
         // useless. For this reason, we unfortunately cannot rely on GPU timing
