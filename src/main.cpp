@@ -7,12 +7,17 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+#ifdef __EMSCRIPTEN__
+#define GLFW_INCLUDE_ES3
+#else
 #define GLFW_INCLUDE_GLCOREARB
+#endif
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#define TARGET_WEB
 #endif
 
 #include <algorithm>
@@ -28,6 +33,7 @@
 #include <memory>
 #include <numbers>
 #include <optional>
+#include <source_location>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -44,9 +50,8 @@ void emscripten_main_loop()
 }
 #endif
 
-#define ENUMERATE_GL_FUNCTIONS(f)                                              \
+#define ENUMERATE_GL_FUNCTIONS_COMMON(f)                                       \
     f(PFNGLENABLEPROC, glEnable);                                              \
-    f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
     f(PFNGLCREATESHADERPROC, glCreateShader);                                  \
     f(PFNGLDELETESHADERPROC, glDeleteShader);                                  \
     f(PFNGLSHADERSOURCEPROC, glShaderSource);                                  \
@@ -71,7 +76,6 @@ void emscripten_main_loop()
     f(PFNGLBINDTEXTUREPROC, glBindTexture);                                    \
     f(PFNGLTEXPARAMETERIPROC, glTexParameteri);                                \
     f(PFNGLTEXIMAGE2DPROC, glTexImage2D);                                      \
-    f(PFNGLBINDIMAGETEXTUREPROC, glBindImageTexture);                          \
     f(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers);                            \
     f(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers);                      \
     f(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);                            \
@@ -83,7 +87,6 @@ void emscripten_main_loop()
     f(PFNGLBUFFERDATAPROC, glBufferData);                                      \
     f(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);                              \
     f(PFNGLBUFFERSUBDATAPROC, glBufferSubData);                                \
-    f(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);                          \
     f(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);                            \
     f(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);                      \
     f(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
@@ -93,25 +96,35 @@ void emscripten_main_loop()
     f(PFNGLDRAWELEMENTSPROC, glDrawElements);                                  \
     f(PFNGLDRAWARRAYSPROC, glDrawArrays);                                      \
     f(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
-    f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
     f(PFNGLVIEWPORTPROC, glViewport);                                          \
     f(PFNGLCLEARCOLORPROC, glClearColor);                                      \
     f(PFNGLCLEARPROC, glClear);                                                \
-    f(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);                                \
     f(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);                            \
-    f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
-    f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
-    f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
-    f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);                    \
-    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
     f(PFNGLGETSTRINGIPROC, glGetStringi);                                      \
     f(PFNGLFINISHPROC, glFinish);                                              \
-    f(PFNGLFLUSHPROC, glFlush);                                                \
     f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
     f(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
     f(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
     f(PFNGLGETSTRINGPROC, glGetString);
+
+#define ENUMERATE_GL_FUNCTIONS_430(f)                                          \
+    f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
+    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
+    f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
+    f(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);                                \
+    f(PFNGLBINDIMAGETEXTUREPROC, glBindImageTexture);                          \
+    f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
+    f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
+    f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
+    f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);
+
+#ifndef TARGET_WEB
+#define ENUMERATE_GL_FUNCTIONS(f)                                              \
+    ENUMERATE_GL_FUNCTIONS_COMMON(f) ENUMERATE_GL_FUNCTIONS_430(f)
+#else
+#define ENUMERATE_GL_FUNCTIONS(f) ENUMERATE_GL_FUNCTIONS_COMMON(f)
+#endif
 
 PFNGLGETERRORPROC glGetError {nullptr};
 
@@ -123,11 +136,14 @@ PFNGLGETERRORPROC glGetError {nullptr};
 
 #else
 
-void check_gl_error()
+void check_gl_error(
+    const std::source_location &loc = std::source_location::current())
 {
     GLenum error {};
     while ((error = glGetError()) != GL_NO_ERROR)
     {
+        std::cerr << loc.file_name() << ':' << loc.line() << ", `"
+                  << loc.function_name() << "`: ";
         switch (error)
         {
         case GL_INVALID_ENUM: std::cerr << "GL_INVALID_ENUM"; break;
@@ -137,9 +153,7 @@ void check_gl_error()
             std::cerr << "GL_INVALID_FRAMEBUFFER_OPERATION";
             break;
         case GL_OUT_OF_MEMORY: std::cerr << "GL_OUT_OF_MEMORY"; break;
-        case GL_STACK_UNDERFLOW: std::cerr << "GL_STACK_UNDERFLOW"; break;
-        case GL_STACK_OVERFLOW: std::cerr << "GL_STACK_OVERFLOW"; break;
-        default: std::cerr << "unknown"; break;
+        default: std::cerr << "GL error " << error; break;
         }
         std::cerr << "\n";
     }
@@ -151,17 +165,19 @@ struct GL_function;
 template <typename R, typename... Args>
 struct GL_function<R (*)(Args...)>
 {
-    R operator()(Args... args) const
+    R operator()(
+        Args... args,
+        const std::source_location &loc = std::source_location::current()) const
     {
         if constexpr (std::is_void_v<R>)
         {
             function(args...);
-            check_gl_error();
+            check_gl_error(loc);
         }
         else
         {
             R result {function(args...)};
-            check_gl_error();
+            check_gl_error(loc);
             return result;
         }
     }
@@ -403,10 +419,6 @@ struct Window_state
 };
 
 constexpr unsigned int max_ubo_size {16'384};
-constexpr unsigned int max_material_count {max_ubo_size / sizeof(Material)};
-constexpr unsigned int max_circle_count {max_ubo_size / sizeof(Circle)};
-constexpr unsigned int max_line_count {max_ubo_size / sizeof(Line)};
-constexpr unsigned int max_arc_count {max_ubo_size / sizeof(Arc)};
 
 void glfw_error_callback(int error, const char *description)
 {
@@ -466,6 +478,7 @@ void load_gl_functions()
 #undef LOAD_GL_FUNCTION
 }
 
+#ifndef TARGET_WEB
 void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                 GLenum type,
                                 [[maybe_unused]] GLuint id,
@@ -481,6 +494,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     }
     std::cerr << message << '\n';
 }
+#endif
 
 [[nodiscard]] std::vector<const char *> get_all_extensions()
 {
@@ -585,6 +599,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return program;
 }
 
+#ifndef TARGET_WEB
 [[nodiscard]] auto create_trace_compute_program(const char *glsl_version,
                                                 const Scene &scene)
 {
@@ -603,6 +618,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
 
     return create_program(shader.get());
 }
+#endif
 
 [[nodiscard]] auto create_trace_graphics_program(const char *glsl_version,
                                                  const Scene &scene)
@@ -632,6 +648,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
     return create_program(vertex_shader.get(), fragment_shader.get());
 }
 
+#ifndef TARGET_WEB
 [[nodiscard]] auto create_post_compute_program(const char *glsl_version)
 {
     const auto shader_code = read_file("shaders/post.glsl");
@@ -642,6 +659,7 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
 
     return create_program(shader.get());
 }
+#endif
 
 [[nodiscard]] auto
 create_graphics_program(const char *glsl_version,
@@ -738,21 +756,23 @@ create_graphics_program(const char *glsl_version,
         case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
             oss << "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
             break;
-        case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
-            oss << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
-            break;
-        case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
-            oss << "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
-            break;
         case GL_FRAMEBUFFER_UNSUPPORTED:
             oss << "GL_FRAMEBUFFER_UNSUPPORTED";
             break;
         case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
             oss << "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
             break;
+#ifndef TARGET_WEB
+        case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
+            oss << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
+            break;
+        case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
+            oss << "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
+            break;
         case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
             oss << "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS";
             break;
+#endif
         default:
             oss << "0x" << std::setfill('0') << std::setw(4) << std::hex
                 << status;
@@ -855,6 +875,7 @@ template <typename T>
     return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
+#ifndef TARGET_WEB
 void save_as_png(const char *file_name, int width, int height, GLuint texture)
 {
     std::cout << "Saving " << width << " x " << height << " image to \""
@@ -892,6 +913,7 @@ void save_as_png(const char *file_name, int width, int height, GLuint texture)
         throw std::runtime_error(message.str());
     }
 }
+#endif
 
 [[nodiscard]] constexpr float screen_to_world(double x,
                                               int screen_min,
@@ -1219,7 +1241,7 @@ void run()
     }
     SCOPE_EXIT([] { glfwTerminate(); });
 
-#if defined(TARGET_WEB)
+#ifdef TARGET_WEB
 #define NO_COMPUTE_SHADER
     // WebGL 2.0
     constexpr auto glsl_version = "#version 300 es";
@@ -1268,8 +1290,7 @@ void run()
     load_gl_functions();
 
 #ifdef TARGET_WEB
-    constexpr const char *required_extensions[] {"GL_OES_texture_float",
-                                                 "GL_EXT_color_buffer_float"};
+    constexpr const char *required_extensions[] {"GL_EXT_color_buffer_float"};
     const auto supported_extensions = get_all_extensions();
     for (const char *const required_extension : required_extensions)
     {
@@ -1295,8 +1316,8 @@ void run()
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
     std::cout << "Renderer: \"" << renderer << "\"\n";
 
-    bool auto_workload {false};
 #ifndef TARGET_WEB
+    bool auto_workload {false};
     if (renderer.find("Mesa") != std::string_view::npos &&
         renderer.find("Intel") != std::string_view::npos)
     {
@@ -1399,8 +1420,10 @@ void run()
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+#ifndef TARGET_WEB
     const auto query_start = create_object(glGenQueries, glDeleteQueries);
     const auto query_end = create_object(glGenQueries, glDeleteQueries);
+#endif
 
     const auto materials_ubo = create_uniform_buffer(scene.materials);
     const auto circles_ubo = create_uniform_buffer(scene.circles);
@@ -1562,10 +1585,13 @@ void run()
                 p_state == GLFW_PRESS && !p_pressed)
             {
                 p_pressed = true;
+// FIXME
+#ifndef TARGET_WEB
                 save_as_png("image.png",
                             texture_width,
                             texture_height,
                             target_texture.get());
+#endif
             }
             else if (p_state == GLFW_RELEASE)
             {
@@ -1608,10 +1634,12 @@ void run()
         ImGui::ShowDemoWindow();
         ImGui::Render();
 
+#ifndef TARGET_WEB
         if (auto_workload)
         {
             glQueryCounter(query_start.get(), GL_TIMESTAMP);
         }
+#endif
 
         glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -1722,10 +1750,12 @@ void run()
             reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
                                      sizeof(std::uint32_t)));
 
+#ifndef TARGET_WEB
         if (auto_workload)
         {
             glQueryCounter(query_end.get(), GL_TIMESTAMP);
         }
+#endif
 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1743,6 +1773,7 @@ void run()
             sum_samples = 0;
         }
 
+#ifndef TARGET_WEB
         // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
         // Intel with Mesa drivers return non-sense numbers, rendering them
         // useless. For this reason, we unfortunately cannot rely on GPU timing
@@ -1765,6 +1796,7 @@ void run()
             samples_per_frame =
                 static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
         }
+#endif
     }
 #ifdef __EMSCRIPTEN__
     ;

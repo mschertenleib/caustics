@@ -3,6 +3,12 @@ cmake_minimum_required(VERSION 3.19)
 project(caustics LANGUAGES CXX)
 
 
+set(TARGET_WEB OFF)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Emscripten")
+    set(TARGET_WEB ON)
+endif()
+
+
 set(CPM_DOWNLOAD_VERSION 0.38.2)
 
 if (CPM_SOURCE_CACHE)
@@ -27,13 +33,15 @@ include(${CPM_DOWNLOAD_LOCATION})
 find_package(OpenGL REQUIRED)
 
 
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-CPMAddPackage(
-    GITHUB_REPOSITORY glfw/glfw
-    GIT_TAG 3.4
-)
+if (NOT TARGET_WEB)
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    CPMAddPackage(
+        GITHUB_REPOSITORY glfw/glfw
+        GIT_TAG 3.4
+    )
+endif ()
 
 
 CPMAddPackage(
@@ -57,7 +65,7 @@ target_include_directories(imgui SYSTEM PUBLIC
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui PRIVATE OpenGL::GL glfw)
+target_link_libraries(imgui PRIVATE glfw)
 
 
 CPMAddPackage(
@@ -70,13 +78,38 @@ CPMAddPackage(
 add_executable(caustics src/main.cpp src/vec2.hpp)
 target_compile_features(caustics PRIVATE cxx_std_20)
 target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(caustics PRIVATE OpenGL::GL glfw imgui)
+target_link_libraries(caustics PRIVATE imgui)
 
+if (TARGET_WEB)
+    set_target_properties(caustics PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/web)
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
+    target_include_directories(caustics PRIVATE ${EMSCRIPTEN_ROOT_PATH}/sysroot/include)
+    target_compile_options(caustics PRIVATE
+        -Os
+        -sDISABLE_EXCEPTION_CATCHING=0
+    )
+    target_link_options(caustics PRIVATE
+        -Os
+        -sWASM=1
+        -sUSE_WEBGL2=1
+        -sUSE_GLFW=3
+        -sFULL_ES3=1
+        -sASSERTIONS=1
+        -sDISABLE_EXCEPTION_CATCHING=0
+        -sFORCE_FILESYSTEM=1
+        -sALLOW_MEMORY_GROWTH=1
+        --emrun
+        --shell-file ${CMAKE_SOURCE_DIR}/src/shell.html
+        --preload-file ${CMAKE_SOURCE_DIR}/src/shaders/@shaders/
+    )
+else ()
+    target_link_libraries(caustics PRIVATE glfw)
 
-add_custom_target(shaders ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/shaders $<TARGET_FILE_DIR:caustics>/shaders
-)
-add_dependencies(caustics shaders)
+    add_custom_target(shaders ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/shaders $<TARGET_FILE_DIR:caustics>/shaders
+    )
+    add_dependencies(caustics shaders)
+endif ()
 
 
 set(clang_warnings
