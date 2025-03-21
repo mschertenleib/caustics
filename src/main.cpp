@@ -135,11 +135,18 @@ PFNGLGETERRORPROC glGetError {nullptr};
 void check_gl_error(
     const std::source_location &loc = std::source_location::current())
 {
-    GLenum error {};
-    while ((error = glGetError()) != GL_NO_ERROR)
+    auto error = glGetError();
+    if (error == GL_NO_ERROR)
     {
-        std::cerr << loc.file_name() << ':' << loc.line() << ", `"
-                  << loc.function_name() << "`: ";
+        return;
+    }
+
+    std::cerr << loc.file_name() << ':' << loc.line() << ": ";
+    const char *sep {""};
+
+    do
+    {
+        std::cerr << sep;
         switch (error)
         {
         case GL_INVALID_ENUM: std::cerr << "GL_INVALID_ENUM"; break;
@@ -151,8 +158,10 @@ void check_gl_error(
         case GL_OUT_OF_MEMORY: std::cerr << "GL_OUT_OF_MEMORY"; break;
         default: std::cerr << "GL error " << error; break;
         }
-        std::cerr << "\n";
-    }
+        sep = ", ";
+    } while ((error = glGetError()) != GL_NO_ERROR);
+
+    std::cerr << "\n";
 }
 
 template <typename T>
@@ -180,6 +189,7 @@ struct GL_function<R (*)(Args...)>
 
     R (*function)(Args...);
 };
+
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) GL_function<type> name {nullptr}
 // clang-format on
@@ -1711,6 +1721,7 @@ void run()
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
+#if 0
         glBindVertexArray(vao.get());
 
         glUseProgram(circle_program.get());
@@ -1745,6 +1756,7 @@ void run()
             GL_UNSIGNED_INT,
             reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
                                      sizeof(std::uint32_t)));
+#endif
 
 #ifndef __EMSCRIPTEN__
         if (auto_workload)
