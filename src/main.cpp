@@ -714,6 +714,7 @@ create_graphics_program(const char *glsl_version,
                  GL_RGBA,
                  GL_FLOAT,
                  nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     return texture;
 }
@@ -736,6 +737,7 @@ create_graphics_program(const char *glsl_version,
                  GL_RGBA,
                  GL_UNSIGNED_BYTE,
                  nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     return texture;
 }
@@ -787,6 +789,8 @@ create_graphics_program(const char *glsl_version,
         throw std::runtime_error(oss.str());
     }
 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
     return fbo;
 }
 
@@ -833,6 +837,8 @@ create_graphics_program(const char *glsl_version,
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
 
+    glBindVertexArray(0);
+
     return std::tuple {std::move(vao), std::move(vbo), std::move(ibo)};
 }
 
@@ -848,6 +854,8 @@ void update_vertex_buffer(GLuint vao,
         0,
         static_cast<GLsizei>(geometry.vertices.size() * sizeof(Vertex)),
         geometry.vertices.data());
+
+    glBindVertexArray(0);
 }
 
 template <typename T>
@@ -887,16 +895,17 @@ void save_as_png(const char *file_name, int width, int height, GLuint texture)
     std::cout << "Saving " << width << " x " << height << " image to \""
               << file_name << "\"\n";
 
-    glFinish();
-    glBindTexture(GL_TEXTURE_2D, texture);
-
-    const int channels {4};
+    constexpr int channels {4};
     const auto size_horizontal =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
     const auto size_vertical = static_cast<std::size_t>(height);
 
     std::vector<std::uint8_t> pixels(size_horizontal * size_vertical);
+
+    glFinish();
+    glBindTexture(GL_TEXTURE_2D, texture);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     // Flip the image vertically since the OpenGL image origin is in the
     // bottom-left corner.
@@ -921,14 +930,14 @@ void save_as_png(const char *file_name, int width, int height, GLuint texture)
 }
 #endif
 
-[[nodiscard]] constexpr float screen_to_world(double x,
+[[nodiscard]] constexpr float screen_to_world(float x,
                                               int screen_min,
                                               int screen_size,
                                               float world_center,
                                               float world_size) noexcept
 {
-    const auto u = (static_cast<float>(x) - static_cast<float>(screen_min)) /
-                   static_cast<float>(screen_size);
+    const auto u =
+        (x - static_cast<float>(screen_min)) / static_cast<float>(screen_size);
     return world_center + (u - 0.5f) * world_size;
 }
 
@@ -1255,9 +1264,7 @@ void run()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
 #else
-#if 0
-#define NO_COMPUTE_SHADER // For testing
-#endif
+    // #define NO_COMPUTE_SHADER // For testing
     constexpr auto glsl_version = "#version 430 core";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -1266,6 +1273,7 @@ void run()
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
     glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
 #endif
+    glfwWindowHint(GLFW_SAMPLES, 0);
 
     auto *const window =
         glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
@@ -1420,8 +1428,6 @@ void run()
 #endif
 
     const auto fbo = create_framebuffer(target_texture.get());
-
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1647,7 +1653,6 @@ void run()
         }
 #endif
 
-        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
@@ -1694,22 +1699,24 @@ void run()
 
             glDrawArrays(GL_TRIANGLES, 0, 3);
 
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
             glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
             glUseProgram(post_program.get());
 
             glDrawArrays(GL_TRIANGLES, 0, 3);
-
-            glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 #endif
 
             sample_index += samples_this_frame;
             sum_samples += samples_this_frame;
         }
 
+        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo.get());
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glBlitFramebuffer(0,
                           0,
                           texture_width,
@@ -1721,7 +1728,6 @@ void run()
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
 
-#if 0
         glBindVertexArray(vao.get());
 
         glUseProgram(circle_program.get());
@@ -1756,7 +1762,6 @@ void run()
             GL_UNSIGNED_INT,
             reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
                                      sizeof(std::uint32_t)));
-#endif
 
 #ifndef __EMSCRIPTEN__
         if (auto_workload)
