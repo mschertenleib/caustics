@@ -1727,6 +1727,7 @@ void run()
                           viewport.y + viewport.height,
                           GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         glBindVertexArray(vao.get());
 
@@ -1813,7 +1814,10 @@ void run()
     }
 #ifdef __EMSCRIPTEN__
     ;
-    emscripten_set_main_loop(emscripten_main_loop, 0, true);
+    // FIXME: this is just a hack, but we have a problem with the lifetime of
+    // our RAII objects
+    emscripten_set_main_loop(emscripten_main_loop, 0, false);
+    std::exit(0);
 #endif
 }
 
