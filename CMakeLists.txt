@@ -75,6 +75,12 @@ CPMAddPackage(
 )
 
 
+CPMAddPackage(
+    GITHUB_REPOSITORY nlohmann/json
+    GIT_TAG v3.12.0
+)
+
+
 add_executable(caustics)
 target_sources(caustics PRIVATE
     src/main.cpp
@@ -84,7 +90,8 @@ target_sources(caustics PRIVATE
 )
 target_compile_features(caustics PRIVATE cxx_std_20)
 target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(caustics PRIVATE imgui)
+target_link_libraries(caustics PRIVATE imgui nlohmann_json::nlohmann_json)
+
 
 if (TARGET_WEB)
     set_target_properties(caustics PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/web)

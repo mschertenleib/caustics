@@ -1349,7 +1349,7 @@ void run()
                 s_state == GLFW_PRESS && !s_pressed)
             {
                 s_pressed = true;
-                save_scene(scene, "scene.yaml");
+                save_scene(scene, "scene.json");
             }
             else if (s_state == GLFW_RELEASE)
             {
@@ -1360,14 +1360,10 @@ void run()
                 l_state == GLFW_PRESS && !l_pressed)
             {
                 l_pressed = true;
-                const auto new_scene = load_scene("scene.yaml");
+                const auto new_scene = load_scene("scene.json");
                 std::cerr
                     << "Scene loading is not yet supported as it requires "
                        "recreating some resources\n";
-                if (new_scene.has_value())
-                {
-                    save_scene(new_scene.value(), "new_scene.yaml");
-                }
             }
             else if (l_state == GLFW_RELEASE)
             {

@@ -1,10 +1,40 @@
 #include "scene.hpp"
 
-#include <filesystem>
+#include <nlohmann/json.hpp>
+
 #include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
+
+using json = nlohmann::json;
+
+void to_json(json &j, const vec2 &v)
+{
+    j = json::array({v.x, v.y});
+}
+
+void to_json(json &j, const vec3 &v)
+{
+    j = json::array({v.x, v.y, v.z});
+}
+
+void from_json(const json &j, vec2 &v)
+{
+    j.at(0).get_to(v.x);
+    j.at(1).get_to(v.y);
+}
+
+void from_json(const json &j, vec3 &v)
+{
+    j.at(0).get_to(v.x);
+    j.at(1).get_to(v.y);
+    j.at(2).get_to(v.z);
+}
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Material, color, emissivity, type)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Circle, center, radius, material_id)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Line, a, b, material_id)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Arc, center, radius, a, b, material_id)
 
 Scene create_scene(int texture_width, int texture_height)
 {
@@ -81,45 +111,18 @@ std::optional<Scene> load_scene(const char *file_name)
         return std::nullopt;
     }
 
+    const auto data = json::parse(file);
+
     Scene scene {};
 
-    // FIXME: this is just a test, we need an actual parser that is more
-    // intelligent (like handling newlines between key and value, as well as
-    // nested keys)
-
-    std::string line;
-    while (std::getline(std::ws(file), line))
-    {
-        constexpr auto sep = ": \t";
-        const auto key_end = line.find_first_of(sep);
-        const auto key = line.substr(0, key_end);
-        if (key_end == std::string::npos)
-        {
-            continue;
-        }
-        const auto value_start = line.find_first_not_of(sep, key_end);
-        if (value_start == std::string::npos)
-        {
-            continue;
-        }
-        const auto value = line.substr(value_start);
-        if (key == "view_x")
-        {
-            scene.view_x = std::stof(value);
-        }
-        else if (key == "view_y")
-        {
-            scene.view_y = std::stof(value);
-        }
-        else if (key == "view_width")
-        {
-            scene.view_width = std::stof(value);
-        }
-        else if (key == "view_height")
-        {
-            scene.view_height = std::stof(value);
-        }
-    }
+    data.at("view_x").get_to(scene.view_x);
+    data.at("view_y").get_to(scene.view_y);
+    data.at("view_width").get_to(scene.view_width);
+    data.at("view_height").get_to(scene.view_height);
+    data.at("materials").get_to(scene.materials);
+    data.at("circles").get_to(scene.circles);
+    data.at("lines").get_to(scene.lines);
+    data.at("arcs").get_to(scene.arcs);
 
     return scene;
 }
@@ -136,63 +139,16 @@ void save_scene(const Scene &scene, const char *file_name)
         throw std::runtime_error(message.str());
     }
 
-    file.precision(std::numeric_limits<float>::max_digits10);
+    json data;
 
-    file << "view_x: " << scene.view_x << '\n';
-    file << "view_y: " << scene.view_y << '\n';
-    file << "view_width: " << scene.view_width << '\n';
-    file << "view_height: " << scene.view_height << '\n';
+    data["view_x"] = scene.view_x;
+    data["view_y"] = scene.view_y;
+    data["view_width"] = scene.view_width;
+    data["view_height"] = scene.view_height;
+    data["materials"] = scene.materials;
+    data["circles"] = scene.circles;
+    data["lines"] = scene.lines;
+    data["arcs"] = scene.arcs;
 
-    const auto write_vec2 = [&file](const auto &prefix, const vec2 &v)
-    {
-        file << prefix << "x: " << v.x << '\n';
-        file << prefix << "y: " << v.y << '\n';
-    };
-    const auto write_color = [&file](const auto &prefix, const vec3 &v)
-    {
-        file << prefix << "r: " << v.x << '\n';
-        file << prefix << "g: " << v.y << '\n';
-        file << prefix << "b: " << v.z << '\n';
-    };
-
-    file << "materials:" << (scene.materials.empty() ? " []\n" : "\n");
-    for (const auto &material : scene.materials)
-    {
-        file << "  - color:\n";
-        write_color("        ", material.color);
-        file << "    emissivity:\n";
-        write_color("        ", material.emissivity);
-        file << "    type: " << static_cast<int>(material.type) << '\n';
-    }
-
-    file << "circles:" << (scene.circles.empty() ? " []\n" : "\n");
-    for (const auto &circle : scene.circles)
-    {
-        file << "  - center:\n";
-        write_vec2("        ", circle.center);
-        file << "    radius: " << circle.radius << '\n';
-        file << "    material_id: " << circle.material_id << '\n';
-    }
-
-    file << "lines:" << (scene.lines.empty() ? " []\n" : "\n");
-    for (const auto &line : scene.lines)
-    {
-        file << "  - a:\n";
-        write_vec2("        ", line.a);
-        file << "    b:\n";
-        write_vec2("        ", line.b);
-        file << "    material_id: " << line.material_id << '\n';
-    }
-
-    file << "arcs:" << (scene.arcs.empty() ? " []\n" : "\n");
-    for (const auto &arc : scene.arcs)
-    {
-        file << "  - center:\n";
-        write_vec2("        ", arc.center);
-        file << "    radius: " << arc.radius << '\n';
-        file << "    a:\n";
-        write_vec2("        ", arc.a);
-        file << "    b: " << arc.b << '\n';
-        file << "    material_id: " << arc.material_id << '\n';
-    }
+    file << std::setw(4) << data << '\n';
 }
