@@ -1,3 +1,4 @@
+#include "scene.hpp"
 #include "vec2.hpp"
 
 #include <imgui.h>
@@ -284,25 +285,6 @@ private:
     Destroy m_destroy;
 };
 
-/*[[nodiscard]] auto create_object(GLuint (*create)(), void (*destroy)(GLuint))
-{
-    return GL_object(create(), destroy);
-}
-
-[[nodiscard]] auto
-create_object(GLuint (*create)(GLenum), GLenum arg, void (*destroy)(GLuint))
-{
-    return GL_object(create(arg), destroy);
-}
-
-[[nodiscard]] auto create_object(void (*create)(GLsizei, GLuint *),
-                                 void (*destroy)(GLsizei, const GLuint *))
-{
-    GLuint object {};
-    create(1, &object);
-    return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
-}*/
-
 template <std::invocable C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, D &&destroy)
 {
@@ -324,68 +306,12 @@ template <std::invocable<GLsizei, GLuint *> C,
     return GL_object(object, [destroy](GLuint id) { destroy(1, &id); });
 }
 
-struct vec3
-{
-    float x;
-    float y;
-    float z;
-};
-
 struct vec4
 {
     float x;
     float y;
     float z;
     float w;
-};
-
-enum struct Material_type : std::uint32_t
-{
-    diffuse,
-    specular,
-    dielectric
-};
-
-struct alignas(16) Material
-{
-    alignas(16) vec3 color;
-    alignas(16) vec3 emissivity;
-    Material_type type;
-};
-
-struct alignas(16) Circle
-{
-    alignas(8) vec2 center;
-    float radius;
-    std::uint32_t material_id;
-};
-
-struct alignas(16) Line
-{
-    alignas(8) vec2 a;
-    alignas(8) vec2 b;
-    std::uint32_t material_id;
-};
-
-struct alignas(16) Arc
-{
-    alignas(8) vec2 center;
-    float radius;
-    alignas(8) vec2 a;
-    float b;
-    std::uint32_t material_id;
-};
-
-struct Scene
-{
-    float view_x;
-    float view_y;
-    float view_width;
-    float view_height;
-    std::vector<Material> materials;
-    std::vector<Circle> circles;
-    std::vector<Line> lines;
-    std::vector<Arc> arcs;
 };
 
 struct Vertex
@@ -869,8 +795,8 @@ template <typename T>
     if (data_size > max_ubo_size)
     {
         std::ostringstream oss;
-        oss << "Uniform buffer too big (" << data_size << " > " << max_ubo_size
-            << ')';
+        oss << "Uniform buffer too big (" << data_size << "B > " << max_ubo_size
+            << "B)";
         throw std::runtime_error(oss.str());
     }
 
@@ -896,11 +822,11 @@ void save_as_png(const char *file_name, int width, int height, GLuint texture)
               << file_name << "\"\n";
 
     constexpr int channels {4};
-    const auto size_horizontal =
+    const auto horizontal_size =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
-    const auto size_vertical = static_cast<std::size_t>(height);
+    const auto vertical_size = static_cast<std::size_t>(height);
 
-    std::vector<std::uint8_t> pixels(size_horizontal * size_vertical);
+    std::vector<std::uint8_t> pixels(horizontal_size * vertical_size);
 
     glFinish();
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -909,14 +835,14 @@ void save_as_png(const char *file_name, int width, int height, GLuint texture)
 
     // Flip the image vertically since the OpenGL image origin is in the
     // bottom-left corner.
-    std::vector<std::uint8_t> tmp_row(size_horizontal);
-    for (std::size_t i {0}; i < size_vertical / 2; ++i)
+    std::vector<std::uint8_t> tmp_row(horizontal_size);
+    for (std::size_t i {0}; i < vertical_size / 2; ++i)
     {
-        auto *const top = &pixels[i * size_horizontal];
-        auto *const bottom = &pixels[(size_vertical - 1 - i) * size_horizontal];
-        std::memcpy(tmp_row.data(), top, size_horizontal);
-        std::memcpy(top, bottom, size_horizontal);
-        std::memcpy(bottom, tmp_row.data(), size_horizontal);
+        auto *const top = &pixels[i * horizontal_size];
+        auto *const bottom = &pixels[(vertical_size - 1 - i) * horizontal_size];
+        std::memcpy(tmp_row.data(), top, horizontal_size);
+        std::memcpy(top, bottom, horizontal_size);
+        std::memcpy(bottom, tmp_row.data(), horizontal_size);
     }
 
     const auto write_result = stbi_write_png(
@@ -1053,197 +979,6 @@ void create_raster_geometry(const Scene &scene,
     }
     geometry.arc_indices_size =
         geometry.indices.size() - geometry.arc_indices_offset;
-}
-
-[[nodiscard]] Scene create_scene(int texture_width, int texture_height)
-{
-    const auto view_x = 0.5f;
-    const auto view_y = 0.5f * static_cast<float>(texture_height) /
-                        static_cast<float>(texture_width);
-    const auto view_width = 1.0f;
-    const auto view_height = 1.0f * static_cast<float>(texture_height) /
-                             static_cast<float>(texture_width);
-
-#if 1
-    Scene scene {
-        .view_x = view_x,
-        .view_y = view_y,
-        .view_width = view_width,
-        .view_height = view_height,
-        .materials =
-            {Material {{0.75f, 0.75f, 0.75f},
-                       {6.0f, 6.0f, 6.0f},
-                       Material_type::diffuse},
-             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
-             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
-             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
-             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
-             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
-        .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
-                    Circle {{0.5f, 0.3f}, 0.15f, 1},
-                    Circle {{0.8f, 0.2f}, 0.05f, 2}},
-        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
-                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
-        .arcs = {
-            Arc {{0.6f, 0.6f},
-                 0.1f,
-                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
-                 -0.04f,
-                 3},
-            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
-            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
-#elif 0
-    Scene scene {
-        .view_x = view_x,
-        .view_y = view_y,
-        .view_width = view_width,
-        .view_height = view_height,
-        .materials = {Material {
-            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
-        .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
-        .lines = {},
-        .arcs = {}};
-#else
-    Scene scene {.view_x = view_x,
-                 .view_y = view_y,
-                 .view_width = view_width,
-                 .view_height = view_height,
-                 .materials = {Material {{0.75f, 0.75f, 0.75f},
-                                         {6.0f, 6.0f, 6.0f},
-                                         Material_type::diffuse}},
-                 .circles = {},
-                 .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
-                 .arcs = {}};
-#endif
-
-    return scene;
-}
-
-[[nodiscard]] std::optional<Scene> load_scene(const char *file_name)
-{
-    std::cout << "Loading scene from \"" << file_name << "\"\n";
-
-    std::ifstream file(file_name);
-    if (!file.is_open())
-    {
-        std::cerr << "Failed to read scene file \"" << file_name << '\"';
-        return std::nullopt;
-    }
-
-    Scene scene {};
-
-    // FIXME: this is just a test, we need an actual parser that is more
-    // intelligent (like handling newlines between key and value, as well as
-    // nested keys)
-
-    std::string line;
-    while (std::getline(std::ws(file), line))
-    {
-        constexpr auto sep = ": \t";
-        const auto key_end = line.find_first_of(sep);
-        const auto key = line.substr(0, key_end);
-        if (key_end == std::string::npos)
-        {
-            continue;
-        }
-        const auto value_start = line.find_first_not_of(sep, key_end);
-        if (value_start == std::string::npos)
-        {
-            continue;
-        }
-        const auto value = line.substr(value_start);
-        if (key == "view_x")
-        {
-            scene.view_x = std::stof(value);
-        }
-        else if (key == "view_y")
-        {
-            scene.view_y = std::stof(value);
-        }
-        else if (key == "view_width")
-        {
-            scene.view_width = std::stof(value);
-        }
-        else if (key == "view_height")
-        {
-            scene.view_height = std::stof(value);
-        }
-    }
-
-    return scene;
-}
-
-void save_scene(const Scene &scene, const char *file_name)
-{
-    std::cout << "Saving scene to \"" << file_name << "\"\n";
-
-    std::ofstream file(file_name);
-    if (!file.is_open())
-    {
-        std::ostringstream message;
-        message << "Failed to write to scene file \"" << file_name << '\"';
-        throw std::runtime_error(message.str());
-    }
-
-    file.precision(std::numeric_limits<float>::max_digits10);
-
-    file << "view_x: " << scene.view_x << '\n';
-    file << "view_y: " << scene.view_y << '\n';
-    file << "view_width: " << scene.view_width << '\n';
-    file << "view_height: " << scene.view_height << '\n';
-
-    const auto write_vec2 = [&file](const auto &prefix, const vec2 &v)
-    {
-        file << prefix << "x: " << v.x << '\n';
-        file << prefix << "y: " << v.y << '\n';
-    };
-    const auto write_color = [&file](const auto &prefix, const vec3 &v)
-    {
-        file << prefix << "r: " << v.x << '\n';
-        file << prefix << "g: " << v.y << '\n';
-        file << prefix << "b: " << v.z << '\n';
-    };
-
-    file << "materials:" << (scene.materials.empty() ? " []\n" : "\n");
-    for (const auto &material : scene.materials)
-    {
-        file << "  - color:\n";
-        write_color("        ", material.color);
-        file << "    emissivity:\n";
-        write_color("        ", material.emissivity);
-        file << "    type: " << static_cast<int>(material.type) << '\n';
-    }
-
-    file << "circles:" << (scene.circles.empty() ? " []\n" : "\n");
-    for (const auto &circle : scene.circles)
-    {
-        file << "  - center:\n";
-        write_vec2("        ", circle.center);
-        file << "    radius: " << circle.radius << '\n';
-        file << "    material_id: " << circle.material_id << '\n';
-    }
-
-    file << "lines:" << (scene.lines.empty() ? " []\n" : "\n");
-    for (const auto &line : scene.lines)
-    {
-        file << "  - a:\n";
-        write_vec2("        ", line.a);
-        file << "    b:\n";
-        write_vec2("        ", line.b);
-        file << "    material_id: " << line.material_id << '\n';
-    }
-
-    file << "arcs:" << (scene.arcs.empty() ? " []\n" : "\n");
-    for (const auto &arc : scene.arcs)
-    {
-        file << "  - center:\n";
-        write_vec2("        ", arc.center);
-        file << "    radius: " << arc.radius << '\n';
-        file << "    a:\n";
-        write_vec2("        ", arc.a);
-        file << "    b: " << arc.b << '\n';
-        file << "    material_id: " << arc.material_id << '\n';
-    }
 }
 
 void run()
