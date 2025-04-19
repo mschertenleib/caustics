@@ -1230,6 +1230,7 @@ void run()
     bool s_pressed {false};
     bool l_pressed {false};
     bool dragging {false};
+    bool draw_geometry {true};
     float drag_source_mouse_x {};
     float drag_source_mouse_y {};
 
@@ -1374,7 +1375,20 @@ void run()
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        ImGui::ShowDemoWindow();
+
+        // ImGui::ShowDemoWindow();
+
+        if (ImGui::Begin("UI"))
+        {
+            ImGui::Text("%.3f ms/frame (%.2f fps)",
+                        static_cast<double>(1000.0f / ImGui::GetIO().Framerate),
+                        static_cast<double>(ImGui::GetIO().Framerate));
+            ImGui::Text("%u samples", sample_index);
+
+            ImGui::Checkbox("Draw geometry", &draw_geometry);
+            ImGui::End();
+        }
+
         ImGui::Render();
 
 #ifndef __EMSCRIPTEN__
@@ -1460,40 +1474,45 @@ void run()
                           GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-        glBindVertexArray(vao.get());
+        if (draw_geometry)
+        {
+            glBindVertexArray(vao.get());
 
-        glUseProgram(circle_program.get());
-        glUniform2f(loc_view_position_draw_circle, scene.view_x, scene.view_y);
-        glUniform2f(
-            loc_view_size_draw_circle, scene.view_width, scene.view_height);
-        glDrawElements(
-            GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.circle_indices_size),
-            GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.circle_indices_offset *
-                                     sizeof(std::uint32_t)));
+            glUseProgram(circle_program.get());
+            glUniform2f(
+                loc_view_position_draw_circle, scene.view_x, scene.view_y);
+            glUniform2f(
+                loc_view_size_draw_circle, scene.view_width, scene.view_height);
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(raster_geometry.circle_indices_size),
+                GL_UNSIGNED_INT,
+                reinterpret_cast<void *>(raster_geometry.circle_indices_offset *
+                                         sizeof(std::uint32_t)));
 
-        glUseProgram(line_program.get());
-        glUniform2f(loc_view_position_draw_line, scene.view_x, scene.view_y);
-        glUniform2f(
-            loc_view_size_draw_line, scene.view_width, scene.view_height);
-        glDrawElements(
-            GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.line_indices_size),
-            GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.line_indices_offset *
-                                     sizeof(std::uint32_t)));
+            glUseProgram(line_program.get());
+            glUniform2f(
+                loc_view_position_draw_line, scene.view_x, scene.view_y);
+            glUniform2f(
+                loc_view_size_draw_line, scene.view_width, scene.view_height);
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(raster_geometry.line_indices_size),
+                GL_UNSIGNED_INT,
+                reinterpret_cast<void *>(raster_geometry.line_indices_offset *
+                                         sizeof(std::uint32_t)));
 
-        glUseProgram(arc_program.get());
-        glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
-        glUniform2f(
-            loc_view_size_draw_arc, scene.view_width, scene.view_height);
-        glDrawElements(
-            GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.arc_indices_size),
-            GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
-                                     sizeof(std::uint32_t)));
+            glUseProgram(arc_program.get());
+            glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
+            glUniform2f(
+                loc_view_size_draw_arc, scene.view_width, scene.view_height);
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(raster_geometry.arc_indices_size),
+                GL_UNSIGNED_INT,
+                reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
+                                         sizeof(std::uint32_t)));
+        }
 
 #ifndef __EMSCRIPTEN__
         if (auto_workload)
