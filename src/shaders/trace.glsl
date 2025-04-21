@@ -125,7 +125,7 @@ bool intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius, in
     return false;
 }
 
-bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t, out float u)
+bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t, inout float u)
 {
     vec2 ab = b - a;
     float determinant = direction.x * ab.y - direction.y * ab.x;
@@ -187,6 +187,7 @@ bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, vec2 
 bool intersect(vec2 origin, vec2 direction, out float t, out float u, out int geometry_type, out int geometry_index)
 {
     t = 1e6;
+    u = 0.0;
     geometry_type = GEOMETRY_NONE;
     geometry_index = -1;
 
