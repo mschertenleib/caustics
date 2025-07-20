@@ -84,8 +84,8 @@ CPMAddPackage(
 add_executable(caustics)
 target_sources(caustics PRIVATE
     src/main.cpp
-    src/scene.hpp
-    src/scene.cpp
+    src/application.hpp src/application.cpp
+    src/scene.hpp src/scene.cpp
     src/vec2.hpp
 )
 target_compile_features(caustics PRIVATE cxx_std_20)
