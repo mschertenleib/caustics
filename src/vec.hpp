@@ -9,9 +9,34 @@ struct vec2
     float y;
 
     [[nodiscard]] constexpr bool
-    operator==(const vec2 &other) const noexcept = default;
+    operator==(const vec2 &) const noexcept = default;
     [[nodiscard]] constexpr bool
-    operator!=(const vec2 &other) const noexcept = default;
+    operator!=(const vec2 &) const noexcept = default;
+};
+
+struct vec3
+{
+    float x;
+    float y;
+    float z;
+
+    [[nodiscard]] constexpr bool
+    operator==(const vec3 &) const noexcept = default;
+    [[nodiscard]] constexpr bool
+    operator!=(const vec3 &) const noexcept = default;
+};
+
+struct vec4
+{
+    float x;
+    float y;
+    float z;
+    float w;
+
+    [[nodiscard]] constexpr bool
+    operator==(const vec4 &) const noexcept = default;
+    [[nodiscard]] constexpr bool
+    operator!=(const vec4 &) const noexcept = default;
 };
 
 [[nodiscard]] constexpr vec2 operator+(const vec2 &v) noexcept

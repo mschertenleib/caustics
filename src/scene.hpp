@@ -1,18 +1,11 @@
 #ifndef SCENE_HPP
 #define SCENE_HPP
 
-#include "vec2.hpp"
+#include "vec.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <vector>
-
-struct vec3
-{
-    float x;
-    float y;
-    float z;
-};
 
 enum struct Material_type : std::uint32_t
 {

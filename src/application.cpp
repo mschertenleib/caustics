@@ -1,6 +1,6 @@
 #include "application.hpp"
 #include "scene.hpp"
-#include "vec2.hpp"
+#include "vec.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -196,9 +196,9 @@ template <std::invocable C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, D &&destroy)
 {
 #ifdef __EMSCRIPTEN__
-    return GL_object(create(), destroy.function);
+    return Unique_resource(create(), GL_deleter {destroy.function});
 #else
-    return GL_object(create(), destroy);
+    return Unique_resource(create(), GL_deleter {destroy});
 #endif
 }
 
@@ -206,9 +206,9 @@ template <std::invocable<GLenum> C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, GLenum arg, D &&destroy)
 {
 #ifdef __EMSCRIPTEN__
-    return GL_object(create(arg), destroy.function);
+    return Unique_resource(create(arg), GL_deleter {destroy.function});
 #else
-    return GL_object(create(arg), destroy);
+    return Unique_resource(create(arg), GL_deleter {destroy});
 #endif
 }
 
@@ -219,9 +219,9 @@ template <std::invocable<GLsizei, GLuint *> C,
     GLuint object {};
     create(1, &object);
 #ifdef __EMSCRIPTEN__
-    return GL_object(object, GL_array_deleter {destroy.function});
+    return Unique_resource(object, GL_array_deleter {destroy.function});
 #else
-    return GL_object(object, GL_array_deleter {destroy});
+    return Unique_resource(object, GL_array_deleter {destroy});
 #endif
 }
 
@@ -866,17 +866,34 @@ void create_raster_geometry(const Scene &scene,
 
 } // namespace
 
-void Deleter::operator()(GLFWwindow *window)
+void GLFW_deleter::operator()(bool)
 {
-    glfwDestroyWindow(window);
     glfwTerminate();
 }
 
-void Deleter::operator()(ImGuiContext *ctx)
+void Window_deleter::operator()(struct GLFWwindow *window)
+{
+    glfwDestroyWindow(window);
+}
+
+void ImGui_deleter::operator()(bool)
+{
+    ImGui::DestroyContext();
+}
+
+void ImGui_glfw_deleter::operator()(bool)
+{
+    ImGui_ImplGlfw_Shutdown();
+}
+
+void ImGui_opengl_deleter::operator()(bool)
 {
     ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext(ctx);
+}
+
+void GL_deleter::operator()(GLuint handle)
+{
+    destroy(handle);
 }
 
 void GL_array_deleter::operator()(GLuint handle)
@@ -892,6 +909,7 @@ void Application::run()
     {
         throw std::runtime_error("Failed to initialize GLFW");
     }
+    glfw_context = decltype(glfw_context)(true);
 
 #ifdef __EMSCRIPTEN__
     // WebGL 2.0
@@ -917,8 +935,7 @@ void Application::run()
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
-    // FIXME
-    window.reset(window_ptr);
+    window = decltype(window)(window_ptr);
 
     glfwMakeContextCurrent(window.get());
 
@@ -986,16 +1003,17 @@ void Application::run()
 #endif
 
     IMGUI_CHECKVERSION();
-    auto *const ctx = ImGui::CreateContext();
+    ImGui::CreateContext();
+    imgui_context = decltype(imgui_context)(true);
 
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window.get(), true))
     {
-        ImGui::DestroyContext(ctx);
         throw std::runtime_error("ImGui: failed to initialize GLFW backend");
     }
+    imgui_glfw_context = decltype(imgui_glfw_context)(true);
 
 #ifdef __EMSCRIPTEN__
     ImGui_ImplGlfw_InstallEmscriptenCallbacks(window.get(), "#canvas");
@@ -1003,13 +1021,9 @@ void Application::run()
 
     if (!ImGui_ImplOpenGL3_Init(glsl_version))
     {
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext(ctx);
         throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
     }
-
-    // FIXME
-    imgui_context.reset(ctx);
+    imgui_opengl_context = decltype(imgui_opengl_context)(true);
 
     texture_width = 320;
     texture_height = 240;

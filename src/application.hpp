@@ -2,6 +2,8 @@
 #define APPLICATION_HPP
 
 #include "scene.hpp"
+#include "unique_resource.hpp"
+#include "vec.hpp"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -14,7 +16,6 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdint>
-#include <memory>
 #include <utility>
 #include <vector>
 
@@ -22,76 +23,41 @@
 #define NO_COMPUTE_SHADER
 #endif
 
-struct Deleter
+struct GLFW_deleter
+{
+    void operator()(bool);
+};
+
+struct Window_deleter
 {
     void operator()(struct GLFWwindow *window);
-    void operator()(struct ImGuiContext *ctx);
+};
+
+struct ImGui_deleter
+{
+    void operator()(bool);
+};
+
+struct ImGui_glfw_deleter
+{
+    void operator()(bool);
+};
+
+struct ImGui_opengl_deleter
+{
+    void operator()(bool);
+};
+
+struct GL_deleter
+{
+    void (*destroy)(GLuint);
+    void operator()(GLuint handle);
 };
 
 struct GL_array_deleter
 {
     void (*destroy)(GLsizei, const GLuint *);
     void operator()(GLuint handle);
-};
-
-template <typename Destroy>
-class GL_object
-{
-public:
-    constexpr GL_object() : m_object {}, m_destroy {}
-    {
-    }
-
-    constexpr GL_object(GLuint object, Destroy &&destroy)
-        : m_object {object}, m_destroy {std::move(destroy)}
-    {
-    }
-
-    constexpr GL_object(GLuint object, const Destroy &destroy)
-        : m_object {object}, m_destroy {destroy}
-    {
-    }
-
-    constexpr GL_object(GL_object &&rhs) noexcept
-        : m_object {std::move(rhs.m_object)},
-          m_destroy {std::move(rhs.m_destroy)}
-    {
-        rhs.m_object = 0;
-    }
-
-    constexpr GL_object &operator=(GL_object &&rhs) noexcept
-    {
-        GL_object tmp(std::move(rhs));
-        swap(tmp);
-        return *this;
-    }
-
-    GL_object(const GL_object &) = delete;
-    GL_object &operator=(const GL_object &) = delete;
-
-    constexpr ~GL_object() noexcept
-    {
-        if (m_object != 0)
-        {
-            m_destroy(m_object);
-        }
-    }
-
-    [[nodiscard]] constexpr GLuint get() const noexcept
-    {
-        return m_object;
-    }
-
-    constexpr void swap(GL_object &rhs) noexcept
-    {
-        using std::swap;
-        swap(m_object, rhs.m_object);
-        swap(m_destroy, rhs.m_destroy);
-    }
-
-private:
-    GLuint m_object;
-    Destroy m_destroy;
 };
 
 struct Window_state
@@ -101,14 +67,6 @@ struct Window_state
     int framebuffer_width;
     int framebuffer_height;
     float scroll_offset;
-};
-
-struct vec4
-{
-    float x;
-    float y;
-    float z;
-    float w;
 };
 
 struct Vertex
@@ -134,45 +92,48 @@ struct Application
 {
     void run();
 
-    std::unique_ptr<struct GLFWwindow, Deleter> window {};
-    std::unique_ptr<struct ImGuiContext, Deleter> imgui_context {};
+    Unique_resource<bool, GLFW_deleter> glfw_context {};
+    Unique_resource<struct GLFWwindow *, Window_deleter> window {};
+    Unique_resource<bool, ImGui_deleter> imgui_context {};
+    Unique_resource<bool, ImGui_glfw_deleter> imgui_glfw_context {};
+    Unique_resource<bool, ImGui_opengl_deleter> imgui_opengl_context {};
     Window_state window_state {};
     bool auto_workload {};
     int texture_width {};
     int texture_height {};
     Scene scene {};
-    GL_object<GL_array_deleter> accumulation_texture {};
-    GL_object<GL_array_deleter> target_texture {};
-    GL_object<PFNGLDELETEPROGRAMPROC> trace_program {};
+    Unique_resource<GLuint, GL_array_deleter> accumulation_texture {};
+    Unique_resource<GLuint, GL_array_deleter> target_texture {};
+    Unique_resource<GLuint, GL_deleter> trace_program {};
 #ifdef NO_COMPUTE_SHADER
-    GL_object<GL_array_deleter> empty_vao {};
+    Unique_resource<GLuint, GL_array_deleter> empty_vao {};
     GLint loc_image_size {};
 #endif
     GLint loc_sample_index {};
     GLint loc_samples_per_frame {};
     GLint loc_view_position {};
     GLint loc_view_size {};
-    GL_object<PFNGLDELETEPROGRAMPROC> post_program {};
+    Unique_resource<GLuint, GL_deleter> post_program {};
 #ifdef NO_COMPUTE_SHADER
-    GL_object<GL_array_deleter> float_fbo {};
+    Unique_resource<GLuint, GL_array_deleter> float_fbo {};
 #endif
-    GL_object<GL_array_deleter> fbo {};
+    Unique_resource<GLuint, GL_array_deleter> fbo {};
 #ifndef __EMSCRIPTEN__
-    GL_object<GL_array_deleter> query_start {};
-    GL_object<GL_array_deleter> query_end {};
+    Unique_resource<GLuint, GL_array_deleter> query_start {};
+    Unique_resource<GLuint, GL_array_deleter> query_end {};
 #endif
-    GL_object<GL_array_deleter> materials_ubo {};
-    GL_object<GL_array_deleter> circles_ubo {};
-    GL_object<GL_array_deleter> lines_ubo {};
-    GL_object<GL_array_deleter> arcs_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> materials_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> circles_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> lines_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> arcs_ubo {};
     float thickness {}; // In fraction of the view height
     Raster_geometry raster_geometry {};
-    GL_object<GL_array_deleter> vao {};
-    GL_object<GL_array_deleter> vbo {};
-    GL_object<GL_array_deleter> ibo {};
-    GL_object<PFNGLDELETEPROGRAMPROC> circle_program {};
-    GL_object<PFNGLDELETEPROGRAMPROC> line_program {};
-    GL_object<PFNGLDELETEPROGRAMPROC> arc_program {};
+    Unique_resource<GLuint, GL_array_deleter> vao {};
+    Unique_resource<GLuint, GL_array_deleter> vbo {};
+    Unique_resource<GLuint, GL_array_deleter> ibo {};
+    Unique_resource<GLuint, GL_deleter> circle_program {};
+    Unique_resource<GLuint, GL_deleter> line_program {};
+    Unique_resource<GLuint, GL_deleter> arc_program {};
     GLint loc_view_position_draw_circle {};
     GLint loc_view_size_draw_circle {};
     GLint loc_view_position_draw_line {};

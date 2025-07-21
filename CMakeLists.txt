@@ -86,7 +86,8 @@ target_sources(caustics PRIVATE
     src/main.cpp
     src/application.hpp src/application.cpp
     src/scene.hpp src/scene.cpp
-    src/vec2.hpp
+    src/unique_resource.hpp
+    src/vec.hpp
 )
 target_compile_features(caustics PRIVATE cxx_std_20)
 target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
