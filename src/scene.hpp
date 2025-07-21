@@ -4,7 +4,7 @@
 #include "vec.hpp"
 
 #include <cstdint>
-#include <optional>
+#include <expected>
 #include <vector>
 
 enum struct Material_type : std::uint32_t
@@ -56,10 +56,17 @@ struct Scene
     std::vector<Arc> arcs;
 };
 
+enum struct Scene_error
+{
+    file_no_found
+};
+
 [[nodiscard]] Scene create_scene(int texture_width, int texture_height);
 
-[[nodiscard]] std::optional<Scene> load_scene(const char *file_name);
+[[nodiscard]] std::expected<Scene, Scene_error>
+load_scene(const char *file_name);
 
-void save_scene(const Scene &scene, const char *file_name);
+[[nodiscard]] std::expected<void, Scene_error>
+save_scene(const Scene &scene, const char *file_name);
 
 #endif

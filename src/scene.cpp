@@ -75,7 +75,7 @@ Scene create_scene(int texture_width, int texture_height)
                  3},
             Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
             Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
-#elif 0
+#elif 1
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
@@ -102,15 +102,12 @@ Scene create_scene(int texture_width, int texture_height)
     return scene;
 }
 
-std::optional<Scene> load_scene(const char *file_name)
+std::expected<Scene, Scene_error> load_scene(const char *file_name)
 {
-    std::cout << "Loading scene from \"" << file_name << "\"\n";
-
     std::ifstream file(file_name);
     if (!file.is_open())
     {
-        std::cerr << "Failed to read scene file \"" << file_name << '\"';
-        return std::nullopt;
+        return std::unexpected(Scene_error::file_no_found);
     }
 
     const auto data = json::parse(file);
@@ -129,16 +126,13 @@ std::optional<Scene> load_scene(const char *file_name)
     return scene;
 }
 
-void save_scene(const Scene &scene, const char *file_name)
+std::expected<void, Scene_error> save_scene(const Scene &scene,
+                                            const char *file_name)
 {
-    std::cout << "Saving scene to \"" << file_name << "\"\n";
-
     std::ofstream file(file_name);
     if (!file.is_open())
     {
-        std::ostringstream message;
-        message << "Failed to write to scene file \"" << file_name << '\"';
-        throw std::runtime_error(message.str());
+        return std::unexpected(Scene_error::file_no_found);
     }
 
     json data;
@@ -153,4 +147,6 @@ void save_scene(const Scene &scene, const char *file_name)
     data["arcs"] = scene.arcs;
 
     file << std::setw(4) << data << '\n';
+
+    return {};
 }

@@ -89,7 +89,7 @@ target_sources(caustics PRIVATE
     src/unique_resource.hpp
     src/vec.hpp
 )
-target_compile_features(caustics PRIVATE cxx_std_20)
+target_compile_features(caustics PRIVATE cxx_std_23)
 target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(caustics PRIVATE imgui nlohmann_json::nlohmann_json)
 

@@ -1254,7 +1254,12 @@ void Application::main_loop_update()
             s_state == GLFW_PRESS && !s_pressed)
         {
             s_pressed = true;
-            save_scene(scene, "scene.json");
+            std::cout << "Saving scene to \"scene.json\"\n";
+            if (const auto result = save_scene(scene, "scene.json");
+                !result.has_value())
+            {
+                std::cerr << "Failed to save scene\n";
+            }
         }
         else if (s_state == GLFW_RELEASE)
         {
@@ -1265,9 +1270,17 @@ void Application::main_loop_update()
             l_state == GLFW_PRESS && !l_pressed)
         {
             l_pressed = true;
-            const auto new_scene = load_scene("scene.json");
-            std::cerr << "Scene loading is not yet supported as it requires "
-                         "recreating some resources\n";
+            std::cout << "Loading scene from \"scene.json\"\n";
+            if (const auto new_scene = load_scene("scene.json");
+                new_scene.has_value())
+            {
+                std::cerr << "Scene loading is not yet supported as it "
+                             "requires recreating some resources\n";
+            }
+            else
+            {
+                std::cerr << "Failed to load scene\n";
+            }
         }
         else if (l_state == GLFW_RELEASE)
         {
