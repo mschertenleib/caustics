@@ -91,6 +91,7 @@ struct Raster_geometry
 struct Application
 {
     void run();
+    void main_loop_update();
 
     Unique_resource<bool, GLFW_deleter> glfw_context {};
     Unique_resource<struct GLFWwindow *, Window_deleter> window {};

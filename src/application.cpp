@@ -32,14 +32,6 @@
 namespace
 {
 
-#ifdef __EMSCRIPTEN__
-std::function<void()> emscripten_main_loop_f;
-void emscripten_main_loop()
-{
-    emscripten_main_loop_f();
-}
-#endif
-
 #define ENUMERATE_GL_FUNCTIONS_COMMON(f)                                       \
     f(PFNGLENABLEPROC, glEnable);                                              \
     f(PFNGLCREATESHADERPROC, glCreateShader);                                  \
@@ -1130,341 +1122,341 @@ void Application::run()
     loc_view_size_draw_arc =
         glGetUniformLocation(arc_program.get(), "view_size");
 
-    constexpr unsigned int max_samples {200'000};
     samples_per_frame = 1;
     last_time = glfwGetTime();
     draw_geometry = true;
 
 #ifdef __EMSCRIPTEN__
+
     ImGui::GetIO().IniFilename = nullptr;
-    emscripten_main_loop_f =
-        [&]
-    {
+
+    emscripten_set_main_loop_arg(
+        [](void *arg) { static_cast<Application *>(arg)->main_loop_update(); },
+        this,
+        0,
+        true);
+
 #else
+
     while (!glfwWindowShouldClose(window.get()))
     {
+        main_loop_update();
+    }
+
 #endif
-        window_state.scroll_offset = 0.0f;
-        glfwPollEvents();
+}
 
-        const auto viewport =
-            centered_viewport(texture_width,
-                              texture_height,
-                              window_state.framebuffer_width,
-                              window_state.framebuffer_height);
+void Application::main_loop_update()
+{
+    constexpr unsigned int max_samples {200'000};
 
-        double xpos {};
-        double ypos {};
-        glfwGetCursorPos(window.get(), &xpos, &ypos);
-        auto mouse_world_x =
-            screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
-                            viewport.x,
-                            viewport.width,
-                            scene.view_x,
-                            scene.view_width);
-        auto mouse_world_y =
-            screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
-                            viewport.y + viewport.height,
-                            -viewport.height,
-                            scene.view_y,
-                            scene.view_height);
+    window_state.scroll_offset = 0.0f;
+    glfwPollEvents();
 
-        if (!ImGui::GetIO().WantCaptureMouse)
+    const auto viewport = centered_viewport(texture_width,
+                                            texture_height,
+                                            window_state.framebuffer_width,
+                                            window_state.framebuffer_height);
+
+    double xpos {};
+    double ypos {};
+    glfwGetCursorPos(window.get(), &xpos, &ypos);
+    auto mouse_world_x =
+        screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
+                        viewport.x,
+                        viewport.width,
+                        scene.view_x,
+                        scene.view_width);
+    auto mouse_world_y =
+        screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
+                        viewport.y + viewport.height,
+                        -viewport.height,
+                        scene.view_y,
+                        scene.view_height);
+
+    if (!ImGui::GetIO().WantCaptureMouse)
+    {
+        if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
+            GLFW_PRESS)
         {
-            if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
-                GLFW_PRESS)
+            if (!dragging)
             {
-                if (!dragging)
-                {
-                    dragging = true;
-                    drag_source_mouse_x = mouse_world_x;
-                    drag_source_mouse_y = mouse_world_y;
-                }
-                else
-                {
-                    const auto drag_delta_x =
-                        mouse_world_x - drag_source_mouse_x;
-                    const auto drag_delta_y =
-                        mouse_world_y - drag_source_mouse_y;
-                    if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
-                    {
-                        scene.view_x -= drag_delta_x;
-                        scene.view_y -= drag_delta_y;
-                        mouse_world_x = drag_source_mouse_x;
-                        mouse_world_y = drag_source_mouse_y;
-                        sample_index = 0;
-                    }
-                }
+                dragging = true;
+                drag_source_mouse_x = mouse_world_x;
+                drag_source_mouse_y = mouse_world_y;
             }
             else
             {
-                dragging = false;
-            }
-
-            if (window_state.scroll_offset != 0.0f)
-            {
-                constexpr float zoom_factor {1.2f};
-                const auto zoom = window_state.scroll_offset > 0.0f
-                                      ? 1.0f / zoom_factor
-                                      : zoom_factor;
-                scene.view_x =
-                    mouse_world_x - (mouse_world_x - scene.view_x) * zoom;
-                scene.view_y =
-                    mouse_world_y - (mouse_world_y - scene.view_y) * zoom;
-                scene.view_width *= zoom;
-                scene.view_height *= zoom;
-                sample_index = 0;
-
-                // NOTE: we update the geometry when scrolling because the
-                // thickness is constant in view space and therefore changes in
-                // world space
-                create_raster_geometry(scene, thickness, raster_geometry);
-                update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
+                const auto drag_delta_x = mouse_world_x - drag_source_mouse_x;
+                const auto drag_delta_y = mouse_world_y - drag_source_mouse_y;
+                if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
+                {
+                    scene.view_x -= drag_delta_x;
+                    scene.view_y -= drag_delta_y;
+                    mouse_world_x = drag_source_mouse_x;
+                    mouse_world_y = drag_source_mouse_y;
+                    sample_index = 0;
+                }
             }
         }
-
-        if (!ImGui::GetIO().WantCaptureKeyboard)
+        else
         {
-            if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
-            {
-                sample_index = 0;
-            }
+            dragging = false;
+        }
 
-            if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
-                p_state == GLFW_PRESS && !p_pressed)
-            {
-                p_pressed = true;
+        if (window_state.scroll_offset != 0.0f)
+        {
+            constexpr float zoom_factor {1.2f};
+            const auto zoom = window_state.scroll_offset > 0.0f
+                                  ? 1.0f / zoom_factor
+                                  : zoom_factor;
+            scene.view_x =
+                mouse_world_x - (mouse_world_x - scene.view_x) * zoom;
+            scene.view_y =
+                mouse_world_y - (mouse_world_y - scene.view_y) * zoom;
+            scene.view_width *= zoom;
+            scene.view_height *= zoom;
+            sample_index = 0;
+
+            // NOTE: we update the geometry when scrolling because the
+            // thickness is constant in view space and therefore changes in
+            // world space
+            create_raster_geometry(scene, thickness, raster_geometry);
+            update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
+        }
+    }
+
+    if (!ImGui::GetIO().WantCaptureKeyboard)
+    {
+        if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
+        {
+            sample_index = 0;
+        }
+
+        if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
+            p_state == GLFW_PRESS && !p_pressed)
+        {
+            p_pressed = true;
 // FIXME
 #ifndef __EMSCRIPTEN__
-                save_as_png("image.png",
-                            texture_width,
-                            texture_height,
-                            target_texture.get());
+            save_as_png("image.png",
+                        texture_width,
+                        texture_height,
+                        target_texture.get());
 #endif
-            }
-            else if (p_state == GLFW_RELEASE)
-            {
-                p_pressed = false;
-            }
-
-            if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
-                s_state == GLFW_PRESS && !s_pressed)
-            {
-                s_pressed = true;
-                save_scene(scene, "scene.json");
-            }
-            else if (s_state == GLFW_RELEASE)
-            {
-                s_pressed = false;
-            }
-
-            if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
-                l_state == GLFW_PRESS && !l_pressed)
-            {
-                l_pressed = true;
-                const auto new_scene = load_scene("scene.json");
-                std::cerr
-                    << "Scene loading is not yet supported as it requires "
-                       "recreating some resources\n";
-            }
-            else if (l_state == GLFW_RELEASE)
-            {
-                l_pressed = false;
-            }
         }
-
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-
-        // ImGui::ShowDemoWindow();
-
-        if (ImGui::Begin("UI"))
+        else if (p_state == GLFW_RELEASE)
         {
-            ImGui::Text("%.3f ms/frame (%.2f fps)",
-                        static_cast<double>(1000.0f / ImGui::GetIO().Framerate),
-                        static_cast<double>(ImGui::GetIO().Framerate));
-            ImGui::Text("%u samples", sample_index);
-
-            ImGui::Checkbox("Draw geometry", &draw_geometry);
-            ImGui::End();
+            p_pressed = false;
         }
 
-        ImGui::Render();
+        if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
+            s_state == GLFW_PRESS && !s_pressed)
+        {
+            s_pressed = true;
+            save_scene(scene, "scene.json");
+        }
+        else if (s_state == GLFW_RELEASE)
+        {
+            s_pressed = false;
+        }
+
+        if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
+            l_state == GLFW_PRESS && !l_pressed)
+        {
+            l_pressed = true;
+            const auto new_scene = load_scene("scene.json");
+            std::cerr << "Scene loading is not yet supported as it requires "
+                         "recreating some resources\n";
+        }
+        else if (l_state == GLFW_RELEASE)
+        {
+            l_pressed = false;
+        }
+    }
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    // ImGui::ShowDemoWindow();
+
+    if (ImGui::Begin("UI"))
+    {
+        ImGui::Text("%.3f ms/frame (%.2f fps)",
+                    static_cast<double>(1000.0f / ImGui::GetIO().Framerate),
+                    static_cast<double>(ImGui::GetIO().Framerate));
+        ImGui::Text("%u samples", sample_index);
+
+        ImGui::Checkbox("Draw geometry", &draw_geometry);
+        ImGui::End();
+    }
+
+    ImGui::Render();
 
 #ifndef __EMSCRIPTEN__
-        if (auto_workload)
-        {
-            glQueryCounter(query_start.get(), GL_TIMESTAMP);
-        }
+    if (auto_workload)
+    {
+        glQueryCounter(query_start.get(), GL_TIMESTAMP);
+    }
 #endif
 
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
 
-        if (sample_index < max_samples)
-        {
-            const auto samples_this_frame =
-                std::min(samples_per_frame, max_samples - sample_index);
-            glUseProgram(trace_program.get());
-            glUniform1i(loc_sample_index, static_cast<int>(sample_index));
-            glUniform1i(loc_samples_per_frame,
-                        static_cast<int>(samples_this_frame));
-            glUniform2f(loc_view_position, scene.view_x, scene.view_y);
-            glUniform2f(loc_view_size, scene.view_width, scene.view_height);
+    if (sample_index < max_samples)
+    {
+        const auto samples_this_frame =
+            std::min(samples_per_frame, max_samples - sample_index);
+        glUseProgram(trace_program.get());
+        glUniform1i(loc_sample_index, static_cast<int>(sample_index));
+        glUniform1i(loc_samples_per_frame,
+                    static_cast<int>(samples_this_frame));
+        glUniform2f(loc_view_position, scene.view_x, scene.view_y);
+        glUniform2f(loc_view_size, scene.view_width, scene.view_height);
 
 #ifndef NO_COMPUTE_SHADER
-            unsigned int num_groups_x {
-                align_up(static_cast<unsigned int>(texture_width), 16) / 16,
-            };
-            unsigned int num_groups_y {
-                align_up(static_cast<unsigned int>(texture_height), 16) / 16,
-            };
+        unsigned int num_groups_x {
+            align_up(static_cast<unsigned int>(texture_width), 16) / 16,
+        };
+        unsigned int num_groups_y {
+            align_up(static_cast<unsigned int>(texture_height), 16) / 16,
+        };
 
-            glDispatchCompute(num_groups_x, num_groups_y, 1);
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        glDispatchCompute(num_groups_x, num_groups_y, 1);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-            glUseProgram(post_program.get());
-            glDispatchCompute(num_groups_x, num_groups_y, 1);
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        glUseProgram(post_program.get());
+        glDispatchCompute(num_groups_x, num_groups_y, 1);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 #else
-            glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
-            glUniform2ui(loc_image_size,
-                         static_cast<unsigned int>(texture_width),
-                         static_cast<unsigned int>(texture_height));
-            glBindVertexArray(empty_vao.get());
+        glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
+        glUniform2ui(loc_image_size,
+                     static_cast<unsigned int>(texture_width),
+                     static_cast<unsigned int>(texture_height));
+        glBindVertexArray(empty_vao.get());
 
-            // new_average = alpha * sample_average + (1 - alpha) * old_average
-            const auto alpha =
-                static_cast<float>(samples_this_frame) /
-                static_cast<float>(sample_index + samples_per_frame);
-            glBlendColor(alpha, alpha, alpha, alpha);
-            glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+        // new_average = alpha * sample_average + (1 - alpha) * old_average
+        const auto alpha = static_cast<float>(samples_this_frame) /
+                           static_cast<float>(sample_index + samples_per_frame);
+        glBlendColor(alpha, alpha, alpha, alpha);
+        glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
 
-            glViewport(0, 0, texture_width, texture_height);
+        glViewport(0, 0, texture_width, texture_height);
 
-            glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
 
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
-            glUseProgram(post_program.get());
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
+        glUseProgram(post_program.get());
 
-            glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
 #endif
 
-            sample_index += samples_this_frame;
-            sum_samples += samples_this_frame;
-        }
-
-        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo.get());
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBlitFramebuffer(0,
-                          0,
-                          texture_width,
-                          texture_height,
-                          viewport.x,
-                          viewport.y,
-                          viewport.x + viewport.width,
-                          viewport.y + viewport.height,
-                          GL_COLOR_BUFFER_BIT,
-                          GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        if (draw_geometry)
-        {
-            glBindVertexArray(vao.get());
-
-            glUseProgram(circle_program.get());
-            glUniform2f(
-                loc_view_position_draw_circle, scene.view_x, scene.view_y);
-            glUniform2f(
-                loc_view_size_draw_circle, scene.view_width, scene.view_height);
-            glDrawElements(
-                GL_TRIANGLES,
-                static_cast<GLsizei>(raster_geometry.circle_indices_size),
-                GL_UNSIGNED_INT,
-                reinterpret_cast<void *>(raster_geometry.circle_indices_offset *
-                                         sizeof(std::uint32_t)));
-
-            glUseProgram(line_program.get());
-            glUniform2f(
-                loc_view_position_draw_line, scene.view_x, scene.view_y);
-            glUniform2f(
-                loc_view_size_draw_line, scene.view_width, scene.view_height);
-            glDrawElements(
-                GL_TRIANGLES,
-                static_cast<GLsizei>(raster_geometry.line_indices_size),
-                GL_UNSIGNED_INT,
-                reinterpret_cast<void *>(raster_geometry.line_indices_offset *
-                                         sizeof(std::uint32_t)));
-
-            glUseProgram(arc_program.get());
-            glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
-            glUniform2f(
-                loc_view_size_draw_arc, scene.view_width, scene.view_height);
-            glDrawElements(
-                GL_TRIANGLES,
-                static_cast<GLsizei>(raster_geometry.arc_indices_size),
-                GL_UNSIGNED_INT,
-                reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
-                                         sizeof(std::uint32_t)));
-        }
-
-#ifndef __EMSCRIPTEN__
-        if (auto_workload)
-        {
-            glQueryCounter(query_end.get(), GL_TIMESTAMP);
-        }
-#endif
-
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        glfwSwapBuffers(window.get());
-
-        ++num_frames;
-        const double current_time {glfwGetTime()};
-        if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
-        {
-            std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
-                      << samples_per_frame << " samples/frame, " << sum_samples
-                      << " samples/s, " << sample_index << " samples\n";
-            num_frames = 0;
-            last_time = current_time;
-            sum_samples = 0;
-        }
-
-#ifndef __EMSCRIPTEN__
-        // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
-        // Intel with Mesa drivers return non-sense numbers, rendering them
-        // useless. For this reason, we unfortunately cannot rely on GPU timing
-        // at all. We could technically have a workaround for this specific
-        // platform, but that also assumes that GL_RENDERER will always return a
-        // string correctly identifying the driver (what happens on WebGL?).
-        if (auto_workload && sample_index < max_samples)
-        {
-            GLuint64 start_time {};
-            GLuint64 end_time {};
-            glGetQueryObjectui64v(
-                query_start.get(), GL_QUERY_RESULT, &start_time);
-            glGetQueryObjectui64v(query_end.get(), GL_QUERY_RESULT, &end_time);
-            const auto elapsed =
-                static_cast<double>(end_time - start_time) / 1e9;
-            constexpr double target_compute_per_frame {0.014};
-            const auto samples_per_frame_f =
-                static_cast<double>(samples_per_frame) *
-                target_compute_per_frame / elapsed;
-            samples_per_frame =
-                static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
-        }
-#endif
+        sample_index += samples_this_frame;
+        sum_samples += samples_this_frame;
     }
-#ifdef __EMSCRIPTEN__
-    ;
-    emscripten_set_main_loop(emscripten_main_loop, 0, true);
+
+    glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo.get());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0,
+                      0,
+                      texture_width,
+                      texture_height,
+                      viewport.x,
+                      viewport.y,
+                      viewport.x + viewport.width,
+                      viewport.y + viewport.height,
+                      GL_COLOR_BUFFER_BIT,
+                      GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (draw_geometry)
+    {
+        glBindVertexArray(vao.get());
+
+        glUseProgram(circle_program.get());
+        glUniform2f(loc_view_position_draw_circle, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_circle, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.circle_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.circle_indices_offset *
+                                     sizeof(std::uint32_t)));
+
+        glUseProgram(line_program.get());
+        glUniform2f(loc_view_position_draw_line, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_line, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.line_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.line_indices_offset *
+                                     sizeof(std::uint32_t)));
+
+        glUseProgram(arc_program.get());
+        glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_arc, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.arc_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
+                                     sizeof(std::uint32_t)));
+    }
+
+#ifndef __EMSCRIPTEN__
+    if (auto_workload)
+    {
+        glQueryCounter(query_end.get(), GL_TIMESTAMP);
+    }
+#endif
+
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    glfwSwapBuffers(window.get());
+
+    ++num_frames;
+    const double current_time {glfwGetTime()};
+    if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
+    {
+        std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
+                  << samples_per_frame << " samples/frame, " << sum_samples
+                  << " samples/s, " << sample_index << " samples\n";
+        num_frames = 0;
+        last_time = current_time;
+        sum_samples = 0;
+    }
+
+#ifndef __EMSCRIPTEN__
+    // NOTE: for some reason, GL_TIMESTAMP or GL_TIME_ELAPSED queries on
+    // Intel with Mesa drivers return non-sense numbers, rendering them
+    // useless. For this reason, we unfortunately cannot rely on GPU timing
+    // at all. We could technically have a workaround for this specific
+    // platform, but that also assumes that GL_RENDERER will always return a
+    // string correctly identifying the driver (what happens on WebGL?).
+    if (auto_workload && sample_index < max_samples)
+    {
+        GLuint64 start_time {};
+        GLuint64 end_time {};
+        glGetQueryObjectui64v(query_start.get(), GL_QUERY_RESULT, &start_time);
+        glGetQueryObjectui64v(query_end.get(), GL_QUERY_RESULT, &end_time);
+        const auto elapsed = static_cast<double>(end_time - start_time) / 1e9;
+        constexpr double target_compute_per_frame {0.014};
+        const auto samples_per_frame_f =
+            static_cast<double>(samples_per_frame) * target_compute_per_frame /
+            elapsed;
+        samples_per_frame =
+            static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
+    }
 #endif
 }
