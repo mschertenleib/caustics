@@ -1,24 +1,30 @@
 #ifndef UNIQUE_RESOURCE_HPP
 #define UNIQUE_RESOURCE_HPP
 
+#include <concepts>
 #include <utility>
 
-// FIXME: proper move and reference semantics
+// TODO: requirements on T and D
 template <typename T, typename D>
 class Unique_resource
 {
 public:
+    // TODO: generalized "invalid handle" value other than relying on operator
+    // bool (via a trait on T for example)
+
+    // TODO: noexcept based on type traits
     constexpr Unique_resource() : m_handle {}, m_deleter {}
     {
     }
 
-    constexpr Unique_resource(T object, D &&deleter)
-        : m_handle {object}, m_deleter {std::move(deleter)}
-    {
-    }
-
-    constexpr Unique_resource(T object, const D &deleter = D())
-        : m_handle {object}, m_deleter {deleter}
+    // TODO: noexcept based on type traits
+    template <typename UT, typename UD = D>
+        requires std::constructible_from<T, UT &&> &&
+                     std::constructible_from<D, UD &&> &&
+                     (!std::same_as<std::remove_cvref_t<UT>, Unique_resource>)
+    explicit constexpr Unique_resource(UT &&handle, UD &&deleter = UD())
+        : m_handle {std::forward<UT>(handle)},
+          m_deleter {std::forward<UD>(deleter)}
     {
     }
 
@@ -29,6 +35,7 @@ public:
         rhs.m_handle = T();
     }
 
+    // TODO: reset/release
     constexpr Unique_resource &operator=(Unique_resource &&rhs) noexcept
     {
         Unique_resource tmp(std::move(rhs));
@@ -47,7 +54,7 @@ public:
         }
     }
 
-    [[nodiscard]] constexpr T get() const noexcept
+    [[nodiscard]] constexpr const T &get() const noexcept
     {
         return m_handle;
     }
@@ -63,5 +70,9 @@ private:
     T m_handle;
     D m_deleter;
 };
+
+template <class UT, class UD>
+Unique_resource(UT &&, UD &&)
+    -> Unique_resource<std::remove_cvref_t<UT>, std::remove_cvref_t<UD>>;
 
 #endif
