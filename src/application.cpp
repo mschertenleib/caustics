@@ -1,6 +1,21 @@
 #include "application.hpp"
 #include "scene.hpp"
+#include "unique_resource.hpp"
 #include "vec.hpp"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define GLFW_INCLUDE_ES3
+#define GL_GLES_PROTOTYPES 0
+#else
+#define GLFW_INCLUDE_GLCOREARB
+#endif
+#define GLFW_INCLUDE_GLEXT
+#include <GLFW/glfw3.h>
+
+#ifdef __EMSCRIPTEN__
+#define NO_COMPUTE_SHADER
+#endif
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -27,6 +42,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace
@@ -183,6 +199,159 @@ struct GL_function<R (*)(Args...)>
 #endif
 
 ENUMERATE_GL_FUNCTIONS(DECLARE_GL_FUNCTION)
+
+struct GLFW_deleter
+{
+    void operator()(bool)
+    {
+        glfwTerminate();
+    }
+};
+
+struct Window_deleter
+{
+    void operator()(struct GLFWwindow *window)
+    {
+        glfwDestroyWindow(window);
+    }
+};
+
+struct ImGui_deleter
+{
+    void operator()(bool)
+    {
+        ImGui::DestroyContext();
+    }
+};
+
+struct ImGui_glfw_deleter
+{
+    void operator()(bool)
+    {
+        ImGui_ImplGlfw_Shutdown();
+    }
+};
+
+struct ImGui_opengl_deleter
+{
+    void operator()(bool)
+    {
+        ImGui_ImplOpenGL3_Shutdown();
+    }
+};
+
+struct GL_deleter
+{
+    void (*destroy)(GLuint);
+    void operator()(GLuint handle)
+    {
+        destroy(handle);
+    }
+};
+
+struct GL_array_deleter
+{
+    void (*destroy)(GLsizei, const GLuint *);
+    void operator()(GLuint handle)
+    {
+        destroy(1, &handle);
+    }
+};
+
+struct Window_state
+{
+    float scale_x;
+    float scale_y;
+    int framebuffer_width;
+    int framebuffer_height;
+    float scroll_offset;
+};
+
+struct Vertex
+{
+    vec2 position;
+    vec4 local;
+    vec3 color;
+};
+
+struct Raster_geometry
+{
+    std::size_t circle_indices_offset;
+    std::size_t circle_indices_size;
+    std::size_t line_indices_offset;
+    std::size_t line_indices_size;
+    std::size_t arc_indices_offset;
+    std::size_t arc_indices_size;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
+struct Application
+{
+    void init();
+    void main_loop_update();
+
+    Unique_resource<bool, GLFW_deleter> glfw_context {};
+    Unique_resource<struct GLFWwindow *, Window_deleter> window {};
+    Unique_resource<bool, ImGui_deleter> imgui_context {};
+    Unique_resource<bool, ImGui_glfw_deleter> imgui_glfw_context {};
+    Unique_resource<bool, ImGui_opengl_deleter> imgui_opengl_context {};
+    Window_state window_state {};
+    bool auto_workload {};
+    int texture_width {};
+    int texture_height {};
+    Scene scene {};
+    Unique_resource<GLuint, GL_array_deleter> accumulation_texture {};
+    Unique_resource<GLuint, GL_array_deleter> target_texture {};
+    Unique_resource<GLuint, GL_deleter> trace_program {};
+#ifdef NO_COMPUTE_SHADER
+    Unique_resource<GLuint, GL_array_deleter> empty_vao {};
+    GLint loc_image_size {};
+#endif
+    GLint loc_sample_index {};
+    GLint loc_samples_per_frame {};
+    GLint loc_view_position {};
+    GLint loc_view_size {};
+    Unique_resource<GLuint, GL_deleter> post_program {};
+#ifdef NO_COMPUTE_SHADER
+    Unique_resource<GLuint, GL_array_deleter> float_fbo {};
+#endif
+    Unique_resource<GLuint, GL_array_deleter> fbo {};
+#ifndef __EMSCRIPTEN__
+    Unique_resource<GLuint, GL_array_deleter> query_start {};
+    Unique_resource<GLuint, GL_array_deleter> query_end {};
+#endif
+    Unique_resource<GLuint, GL_array_deleter> materials_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> circles_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> lines_ubo {};
+    Unique_resource<GLuint, GL_array_deleter> arcs_ubo {};
+    float thickness {}; // In fraction of the view height
+    Raster_geometry raster_geometry {};
+    Unique_resource<GLuint, GL_array_deleter> vao {};
+    Unique_resource<GLuint, GL_array_deleter> vbo {};
+    Unique_resource<GLuint, GL_array_deleter> ibo {};
+    Unique_resource<GLuint, GL_deleter> circle_program {};
+    Unique_resource<GLuint, GL_deleter> line_program {};
+    Unique_resource<GLuint, GL_deleter> arc_program {};
+    GLint loc_view_position_draw_circle {};
+    GLint loc_view_size_draw_circle {};
+    GLint loc_view_position_draw_line {};
+    GLint loc_view_size_draw_line {};
+    GLint loc_view_position_draw_arc {};
+    GLint loc_view_size_draw_arc {};
+    unsigned int sample_index {};
+    unsigned int samples_per_frame {};
+    double last_time {};
+    unsigned int sum_samples {};
+    int num_frames {};
+    bool p_pressed {};
+    bool s_pressed {};
+    bool l_pressed {};
+    bool dragging {};
+    bool draw_geometry {};
+    float drag_source_mouse_x {};
+    float drag_source_mouse_y {};
+};
 
 template <std::invocable C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, D &&destroy)
@@ -856,43 +1025,6 @@ void create_raster_geometry(const Scene &scene,
         geometry.indices.size() - geometry.arc_indices_offset;
 }
 
-} // namespace
-
-void GLFW_deleter::operator()(bool)
-{
-    glfwTerminate();
-}
-
-void Window_deleter::operator()(struct GLFWwindow *window)
-{
-    glfwDestroyWindow(window);
-}
-
-void ImGui_deleter::operator()(bool)
-{
-    ImGui::DestroyContext();
-}
-
-void ImGui_glfw_deleter::operator()(bool)
-{
-    ImGui_ImplGlfw_Shutdown();
-}
-
-void ImGui_opengl_deleter::operator()(bool)
-{
-    ImGui_ImplOpenGL3_Shutdown();
-}
-
-void GL_deleter::operator()(GLuint handle)
-{
-    destroy(handle);
-}
-
-void GL_array_deleter::operator()(GLuint handle)
-{
-    destroy(1, &handle);
-}
-
 void Application::init()
 {
     glfwSetErrorCallback(&glfw_error_callback);
@@ -1127,28 +1259,6 @@ void Application::init()
     draw_geometry = true;
 }
 
-void Application::run()
-{
-#ifdef __EMSCRIPTEN__
-
-    ImGui::GetIO().IniFilename = nullptr;
-
-    emscripten_set_main_loop_arg(
-        [](void *arg) { static_cast<Application *>(arg)->main_loop_update(); },
-        this,
-        0,
-        true);
-
-#else
-
-    while (!glfwWindowShouldClose(window.get()))
-    {
-        main_loop_update();
-    }
-
-#endif
-}
-
 void Application::main_loop_update()
 {
     constexpr unsigned int max_samples {200'000};
@@ -1295,8 +1405,6 @@ void Application::main_loop_update()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // ImGui::ShowDemoWindow();
-
     if (ImGui::Begin("UI"))
     {
         ImGui::Text("%.3f ms/frame (%.2f fps)",
@@ -1305,8 +1413,8 @@ void Application::main_loop_update()
         ImGui::Text("%u samples", sample_index);
 
         ImGui::Checkbox("Draw geometry", &draw_geometry);
-        ImGui::End();
     }
+    ImGui::End();
 
     ImGui::Render();
 
@@ -1475,5 +1583,41 @@ void Application::main_loop_update()
         samples_per_frame =
             static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
     }
+#endif
+}
+
+} // namespace
+
+void run()
+{
+#ifdef __EMSCRIPTEN__
+
+    // NOTE: The emscripten_set_main_loop(..., simulate_infinite_loop=true) call
+    // unwinds the stack (but global or static storage duration objects are not
+    // destroyed), before transferring control to the browser. For this reason,
+    // any object passed to the main loop callback must have static storage
+    // duration.
+
+    static Application app {};
+    app.init();
+
+    ImGui::GetIO().IniFilename = nullptr;
+
+    emscripten_set_main_loop_arg(
+        [](void *arg) { static_cast<Application *>(arg)->main_loop_update(); },
+        &app,
+        0,
+        true);
+
+#else
+
+    Application app {};
+    app.init();
+
+    while (!glfwWindowShouldClose(app.window.get()))
+    {
+        app.main_loop_update();
+    }
+
 #endif
 }
