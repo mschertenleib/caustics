@@ -15,7 +15,18 @@ int main()
         // reason, any object passed to the main loop callback must have static
         // storage duration.
 
+        // FIXME:
+        // Ideally we would want something like:
+        //
+        // static auto app = create_app();
+        // run_app(app);
+        //
+        // But actually, app should only be static in the emscripten case. Do we
+        // want that #ifdef in main? Probably not. In that case, our initial
+        // idea with main calling a single run() function might be the best.
+
         static Application app;
+        app.init();
         app.run();
 
         return EXIT_SUCCESS;

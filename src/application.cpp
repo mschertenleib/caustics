@@ -893,7 +893,7 @@ void GL_array_deleter::operator()(GLuint handle)
     destroy(1, &handle);
 }
 
-void Application::run()
+void Application::init()
 {
     glfwSetErrorCallback(&glfw_error_callback);
 
@@ -1125,7 +1125,10 @@ void Application::run()
     samples_per_frame = 1;
     last_time = glfwGetTime();
     draw_geometry = true;
+}
 
+void Application::run()
+{
 #ifdef __EMSCRIPTEN__
 
     ImGui::GetIO().IniFilename = nullptr;
@@ -1350,8 +1353,9 @@ void Application::main_loop_update()
         glBindVertexArray(empty_vao.get());
 
         // new_average = alpha * sample_average + (1 - alpha) * old_average
-        const auto alpha = static_cast<float>(samples_this_frame) /
-                           static_cast<float>(sample_index + samples_per_frame);
+        const auto alpha =
+            static_cast<float>(samples_this_frame) /
+            static_cast<float>(sample_index + samples_this_frame);
         glBlendColor(alpha, alpha, alpha, alpha);
         glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
 

@@ -90,6 +90,7 @@ struct Raster_geometry
 
 struct Application
 {
+    void init();
     void run();
     void main_loop_update();
 
