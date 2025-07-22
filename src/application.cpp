@@ -1258,7 +1258,7 @@ void Application::main_loop_update()
             if (const auto result = save_scene(scene, "scene.json");
                 !result.has_value())
             {
-                std::cerr << "Failed to save scene\n";
+                std::cerr << result.error() << '\n';
             }
         }
         else if (s_state == GLFW_RELEASE)
@@ -1274,12 +1274,12 @@ void Application::main_loop_update()
             if (const auto new_scene = load_scene("scene.json");
                 new_scene.has_value())
             {
-                std::cerr << "Scene loading is not yet supported as it "
-                             "requires recreating some resources\n";
+                std::cerr << "Scene loading successful but not yet supported "
+                             "as it requires recreating some resources\n";
             }
             else
             {
-                std::cerr << "Failed to load scene\n";
+                std::cerr << new_scene.error() << '\n';
             }
         }
         else if (l_state == GLFW_RELEASE)

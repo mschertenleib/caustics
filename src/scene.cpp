@@ -102,14 +102,35 @@ Scene create_scene(int texture_width, int texture_height)
     return scene;
 }
 
-std::expected<Scene, Scene_error> load_scene(const char *file_name)
+std::expected<Scene, std::string> load_scene(const std::filesystem::path &path)
 {
-    std::ifstream file(file_name);
-    if (!file.is_open())
+    std::error_code ec;
+
+    if (!std::filesystem::exists(path, ec))
     {
-        return std::unexpected(Scene_error::file_no_found);
+        if (ec)
+        {
+            return std::unexpected(ec.message());
+        }
+        return std::unexpected("File not found");
     }
 
+    if (!std::filesystem::is_regular_file(path, ec))
+    {
+        if (ec)
+        {
+            return std::unexpected(ec.message());
+        }
+        return std::unexpected("Not a file");
+    }
+
+    std::ifstream file(path);
+    if (!file)
+    {
+        return std::unexpected("Failed to open file for reading");
+    }
+
+    // FIXME: error handling for JSON parsing
     const auto data = json::parse(file);
 
     Scene scene {};
@@ -126,13 +147,13 @@ std::expected<Scene, Scene_error> load_scene(const char *file_name)
     return scene;
 }
 
-std::expected<void, Scene_error> save_scene(const Scene &scene,
-                                            const char *file_name)
+std::expected<void, std::string> save_scene(const Scene &scene,
+                                            const std::filesystem::path &path)
 {
-    std::ofstream file(file_name);
-    if (!file.is_open())
+    std::ofstream file(path);
+    if (!file)
     {
-        return std::unexpected(Scene_error::file_no_found);
+        return std::unexpected("Failed to open file for writing");
     }
 
     json data;
