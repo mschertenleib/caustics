@@ -159,11 +159,45 @@ else ()
 endif ()
 
 
-if ((CMAKE_CXX_COMPILER_ID MATCHES ".*Clang") OR (CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
-    target_compile_options(caustics PRIVATE $<$<CONFIG:Debug>:-fsanitize=undefined>)
-    #target_compile_options(caustics PRIVATE $<$<CONFIG:Debug>:-fsanitize=address>)
-    target_link_options(caustics PRIVATE $<$<CONFIG:Debug>:-fsanitize=undefined>)
-    #target_link_options(caustics PRIVATE $<$<CONFIG:Debug>:-fsanitize=address>)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set(san_compile -fsanitize=address,undefined,float-divide-by-zero,integer-divide-by-zero -fno-omit-frame-pointer)
+    set(san_link -fsanitize=address,undefined)
+    
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        list(APPEND san_compile
+            -fsanitize-address-use-after-return=runtime
+            -fsanitize-address-use-after-scope
+            -fsanitize=implicit-conversion
+        )
+    endif()
+
+    target_compile_options(caustics PRIVATE $<$<CONFIG:Debug>:${san_compile}>)
+    target_link_options(caustics PRIVATE $<$<CONFIG:Debug>:${san_link}>)
+    
+    set(lsan_suppressions "${CMAKE_BINARY_DIR}/lsan.supp")
+    file(WRITE "${lsan_suppressions}" "leak:_glfwCreateContextGL")
+
+    set(asan_defaults "symbolize=1:fast_unwind_on_malloc=0:detect_leaks=1:leak_check_at_exit=1")
+    set(lsan_defaults "suppressions=$<SHELL_PATH:${lsan_suppressions}>")
+    set(ubsan_defaults "print_stacktrace=1")
+    find_program(LLVM_SYMBOLIZER NAMES llvm-symbolizer llvm-symbolizer-19 llvm-symbolizer-18)
+    if (LLVM_SYMBOLIZER)
+        string(APPEND asan_defaults ":external_symbolizer_path=$<SHELL_PATH:${LLVM_SYMBOLIZER}>")
+    endif()
+
+    set(san_defaults_src "${CMAKE_BINARY_DIR}/sanitizer_defaults.cpp")
+    file(GENERATE OUTPUT "${san_defaults_src}" CONTENT
+"extern \"C\" const char* __asan_default_options() {
+    return \"${asan_defaults}\";
+}
+extern \"C\" const char* __lsan_default_options() {
+    return \"${lsan_defaults}\";
+}
+extern \"C\" const char* __ubsan_default_options() {
+    return \"${ubsan_defaults}\";
+}")
+    target_sources(caustics PRIVATE $<$<CONFIG:Debug>:${san_defaults_src}>)
 endif ()
 
 
