@@ -100,12 +100,13 @@ if (TARGET_WEB)
     target_compile_options(caustics PRIVATE
         -Os
         -sDISABLE_EXCEPTION_CATCHING=0
+        --use-port=contrib.glfw3
     )
     target_link_options(caustics PRIVATE
         -Os
         -sWASM=1
         -sUSE_WEBGL2=1
-        -sUSE_GLFW=3
+        --use-port=contrib.glfw3
         -sFULL_ES3=1
         -sASSERTIONS=1
         -sDISABLE_EXCEPTION_CATCHING=0
@@ -176,7 +177,13 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_link_options(caustics PRIVATE $<$<CONFIG:Debug>:${san_link}>)
     
     set(lsan_suppressions "${CMAKE_BINARY_DIR}/lsan.supp")
-    file(WRITE "${lsan_suppressions}" "leak:_glfwCreateContextGL")
+    file(WRITE "${lsan_suppressions}"
+"leak:_glfwCreateContextGL
+leak:_glfwInitEGL
+leak:libwayland-client
+leak:libgtk
+leak:libfontconfig
+")
 
     set(asan_defaults "symbolize=1:fast_unwind_on_malloc=0:detect_leaks=1:leak_check_at_exit=1")
     set(lsan_defaults "suppressions=$<SHELL_PATH:${lsan_suppressions}>")
