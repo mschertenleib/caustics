@@ -101,11 +101,11 @@ namespace
     f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
     f(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
     f(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
-    f(PFNGLGETSTRINGPROC, glGetString);
+    f(PFNGLGETSTRINGPROC, glGetString);                                        \
+    f(PFNGLREADPIXELSPROC, glReadPixels);
 
 #define ENUMERATE_GL_FUNCTIONS_430(f)                                          \
     f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
-    f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
     f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
     f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
     f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
@@ -804,46 +804,77 @@ template <typename T>
     return ubo;
 }
 
-#ifndef __EMSCRIPTEN__
-void save_as_png(const char *file_name, int width, int height, GLuint texture)
+#ifdef __EMSCRIPTEN__
+// clang-format off
+EM_JS(void, download_as_png_js, (const char* file_name, const std::uint8_t* data_ptr, std::size_t data_size), {
+    const filename = UTF8ToString(file_name);
+    const view = HEAPU8.subarray(data_ptr, data_ptr + data_size);
+
+    const blob = new Blob([view], { type: 'image/png' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+// clang-format on
+#endif
+
+void save_as_png(const char *file_name, int width, int height, GLuint fbo)
 {
     std::cout << "Saving " << width << " x " << height << " image to \""
               << file_name << "\"\n";
 
     constexpr int channels {4};
-    const auto horizontal_size =
-        static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
-    const auto vertical_size = static_cast<std::size_t>(height);
-
-    std::vector<std::uint8_t> pixels(horizontal_size * vertical_size);
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(width * height * channels));
 
     glFinish();
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // Flip the image vertically since the OpenGL image origin is in the
-    // bottom-left corner.
-    std::vector<std::uint8_t> tmp_row(horizontal_size);
-    for (std::size_t i {0}; i < vertical_size / 2; ++i)
+    // The OpenGL image origin is in the bottom-left corner
+    stbi_flip_vertically_on_write(1);
+
+    // TODO: cleanup
+
+#ifdef __EMSCRIPTEN__
+
+    int png_size {};
+    const std::unique_ptr<std::uint8_t, decltype(&std::free)> png(
+        stbi_write_png_to_mem(pixels.data(),
+                              width * channels,
+                              width,
+                              height,
+                              channels,
+                              &png_size),
+        &std::free);
+    if (!png)
     {
-        auto *const top = &pixels[i * horizontal_size];
-        auto *const bottom = &pixels[(vertical_size - 1 - i) * horizontal_size];
-        std::memcpy(tmp_row.data(), top, horizontal_size);
-        std::memcpy(top, bottom, horizontal_size);
-        std::memcpy(bottom, tmp_row.data(), horizontal_size);
+        throw std::runtime_error("Failed to write PNG image");
     }
+
+    download_as_png_js(
+        file_name, png.get(), static_cast<std::size_t>(png_size));
+
+#else
 
     const auto write_result = stbi_write_png(
         file_name, width, height, channels, pixels.data(), width * channels);
     if (write_result == 0)
     {
-        std::ostringstream message;
-        message << "Failed to write PNG image to \"" << file_name << '\"';
-        throw std::runtime_error(message.str());
+        throw std::runtime_error(
+            std::format("Failed to write PNG image to \"{}\"", file_name));
     }
-}
+
 #endif
+}
 
 [[nodiscard]] constexpr float screen_to_world(float x,
                                               int screen_min,
@@ -1283,13 +1314,7 @@ void Application::main_loop_update()
             p_state == GLFW_PRESS && !p_pressed)
         {
             p_pressed = true;
-// FIXME
-#ifndef __EMSCRIPTEN__
-            save_as_png("image.png",
-                        texture_width,
-                        texture_height,
-                        target_texture.get());
-#endif
+            save_as_png("image.png", texture_width, texture_height, fbo.get());
         }
         else if (p_state == GLFW_RELEASE)
         {
