@@ -13,10 +13,6 @@
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 
-#ifdef __EMSCRIPTEN__
-#define NO_COMPUTE_SHADER
-#endif
-
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
@@ -31,6 +27,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -109,9 +106,6 @@ namespace
 #define ENUMERATE_GL_FUNCTIONS_430(f)                                          \
     f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
     f(PFNGLGETTEXIMAGEPROC, glGetTexImage);                                    \
-    f(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);                            \
-    f(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);                                \
-    f(PFNGLBINDIMAGETEXTUREPROC, glBindImageTexture);                          \
     f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
     f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
     f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
@@ -304,18 +298,14 @@ struct Application
     Unique_resource<GLuint, GL_array_deleter> accumulation_texture {};
     Unique_resource<GLuint, GL_array_deleter> target_texture {};
     Unique_resource<GLuint, GL_deleter> trace_program {};
-#ifdef NO_COMPUTE_SHADER
     Unique_resource<GLuint, GL_array_deleter> empty_vao {};
     GLint loc_image_size {};
-#endif
     GLint loc_sample_index {};
     GLint loc_samples_per_frame {};
     GLint loc_view_position {};
     GLint loc_view_size {};
     Unique_resource<GLuint, GL_deleter> post_program {};
-#ifdef NO_COMPUTE_SHADER
     Unique_resource<GLuint, GL_array_deleter> float_fbo {};
-#endif
     Unique_resource<GLuint, GL_array_deleter> fbo {};
 #ifndef __EMSCRIPTEN__
     Unique_resource<GLuint, GL_array_deleter> query_start {};
@@ -393,8 +383,6 @@ struct Viewport
     int width;
     int height;
 };
-
-constexpr unsigned int max_ubo_size {16'384};
 
 void glfw_error_callback(int error, const char *description)
 {
@@ -528,12 +516,14 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     }
 }
 
-[[nodiscard]] auto
-create_shader(GLenum type, std::size_t size, const char *const code[])
+[[nodiscard]] auto create_shader(GLenum type,
+                                 std::size_t sources_size,
+                                 const char *const sources[])
 {
     auto shader = create_object(glCreateShader, type, glDeleteShader);
 
-    glShaderSource(shader.get(), static_cast<GLsizei>(size), code, nullptr);
+    glShaderSource(
+        shader.get(), static_cast<GLsizei>(sources_size), sources, nullptr);
     glCompileShader(shader.get());
 
     int success {};
@@ -544,19 +534,20 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
         glGetShaderiv(shader.get(), GL_INFO_LOG_LENGTH, &buf_length);
         std::string message(static_cast<std::size_t>(buf_length), '\0');
         glGetShaderInfoLog(shader.get(), buf_length, nullptr, message.data());
-        std::ostringstream oss;
-        oss << "Shader compilation failed:\n" << message << '\n';
-        throw std::runtime_error(oss.str());
+        throw std::runtime_error(
+            std::format("Shader compilation failed:\n{}\n", message));
     }
 
     return shader;
 }
 
-[[nodiscard]] auto create_program(auto &&...shaders)
+[[nodiscard]] auto create_program_object(GLuint vertex_shader,
+                                         GLuint fragment_shader)
 {
     auto program = create_object(glCreateProgram, glDeleteProgram);
 
-    (glAttachShader(program.get(), shaders), ...);
+    glAttachShader(program.get(), vertex_shader);
+    glAttachShader(program.get(), fragment_shader);
     glLinkProgram(program.get());
 
     int success {};
@@ -567,37 +558,15 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
         glGetProgramiv(program.get(), GL_INFO_LOG_LENGTH, &buf_length);
         std::string message(static_cast<std::size_t>(buf_length), '\0');
         glGetProgramInfoLog(program.get(), buf_length, nullptr, message.data());
-        std::ostringstream oss;
-        oss << "Program linking failed:\n" << message << '\n';
-        throw std::runtime_error(oss.str());
+        throw std::runtime_error(
+            std::format("Program linking failed:\n{}\n", message));
     }
 
     return program;
 }
 
-#ifndef __EMSCRIPTEN__
-[[nodiscard]] auto create_trace_compute_program(const char *glsl_version,
-                                                const Scene &scene)
-{
-    const auto shader_code = read_file("shaders/trace.glsl");
-    std::ostringstream header;
-    header << glsl_version << '\n'
-           << "#define COMPUTE_SHADER\n"
-           << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
-           << "#define CIRCLE_COUNT " << scene.circles.size() << '\n'
-           << "#define LINE_COUNT " << scene.lines.size() << '\n'
-           << "#define ARC_COUNT " << scene.arcs.size() << '\n';
-    const auto header_str = header.str();
-    const char *const sources[] {header_str.c_str(), shader_code.c_str()};
-    const auto shader =
-        create_shader(GL_COMPUTE_SHADER, std::size(sources), sources);
-
-    return create_program(shader.get());
-}
-#endif
-
-[[nodiscard]] auto create_trace_graphics_program(const char *glsl_version,
-                                                 const Scene &scene)
+[[nodiscard]] auto create_trace_program(const char *glsl_version,
+                                        const Scene &scene)
 {
     const auto vertex_shader_code = read_file("shaders/fullscreen.vert");
     const char *const vertex_shader_sources[] {
@@ -607,40 +576,29 @@ create_shader(GLenum type, std::size_t size, const char *const code[])
                                              vertex_shader_sources);
 
     const auto fragment_shader_code = read_file("shaders/trace.glsl");
-    std::ostringstream header;
-    header << glsl_version << '\n'
-           << "#define MATERIAL_COUNT " << scene.materials.size() << '\n'
-           << "#define CIRCLE_COUNT " << scene.circles.size() << '\n'
-           << "#define LINE_COUNT " << scene.lines.size() << '\n'
-           << "#define ARC_COUNT " << scene.arcs.size() << '\n';
-    const auto header_str = header.str();
-    const char *const fragment_shader_sources[] {header_str.c_str(),
+    const auto header = std::format("{}\n"
+                                    "#define MATERIAL_COUNT {}\n"
+                                    "#define CIRCLE_COUNT {}\n"
+                                    "#define LINE_COUNT {}\n"
+                                    "#define ARC_COUNT {}\n",
+                                    glsl_version,
+                                    scene.materials.size(),
+                                    scene.circles.size(),
+                                    scene.lines.size(),
+                                    scene.arcs.size());
+    const char *const fragment_shader_sources[] {header.c_str(),
                                                  fragment_shader_code.c_str()};
     const auto fragment_shader =
         create_shader(GL_FRAGMENT_SHADER,
                       std::size(fragment_shader_sources),
                       fragment_shader_sources);
 
-    return create_program(vertex_shader.get(), fragment_shader.get());
+    return create_program_object(vertex_shader.get(), fragment_shader.get());
 }
 
-#ifndef __EMSCRIPTEN__
-[[nodiscard]] auto create_post_compute_program(const char *glsl_version)
-{
-    const auto shader_code = read_file("shaders/post.glsl");
-    const char *const sources[] {
-        glsl_version, "\n#define COMPUTE_SHADER\n", shader_code.c_str()};
-    const auto shader =
-        create_shader(GL_COMPUTE_SHADER, std::size(sources), sources);
-
-    return create_program(shader.get());
-}
-#endif
-
-[[nodiscard]] auto
-create_graphics_program(const char *glsl_version,
-                        const char *vertex_shader_file_name,
-                        const char *fragment_shader_file_name)
+[[nodiscard]] auto create_program(const char *glsl_version,
+                                  const char *vertex_shader_file_name,
+                                  const char *fragment_shader_file_name)
 {
     const auto vertex_shader_code = read_file(vertex_shader_file_name);
     const char *const vertex_shader_sources[] {
@@ -657,13 +615,7 @@ create_graphics_program(const char *glsl_version,
                       std::size(fragment_shader_sources),
                       fragment_shader_sources);
 
-    return create_program(vertex_shader.get(), fragment_shader.get());
-}
-
-[[nodiscard]] auto create_post_graphics_program(const char *glsl_version)
-{
-    return create_graphics_program(
-        glsl_version, "shaders/fullscreen.vert", "shaders/post.glsl");
+    return create_program_object(vertex_shader.get(), fragment_shader.get());
 }
 
 [[nodiscard]] auto create_accumulation_texture(GLsizei width, GLsizei height)
@@ -831,6 +783,8 @@ void update_vertex_buffer(GLuint vao,
 template <typename T>
 [[nodiscard]] auto create_uniform_buffer(const std::vector<T> &data)
 {
+    constexpr std::size_t max_ubo_size {16'384};
+
     auto ubo = create_object(glGenBuffers, glDeleteBuffers);
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo.get());
@@ -838,10 +792,8 @@ template <typename T>
     const auto data_size = data.size() * sizeof(T);
     if (data_size > max_ubo_size)
     {
-        std::ostringstream oss;
-        oss << "Uniform buffer too big (" << data_size << "B > " << max_ubo_size
-            << "B)";
-        throw std::runtime_error(oss.str());
+        throw std::runtime_error(std::format(
+            "Uniform buffer too big ({}B > {}B)", data_size, max_ubo_size));
     }
 
     glBufferData(GL_UNIFORM_BUFFER,
@@ -850,13 +802,6 @@ template <typename T>
                  GL_STATIC_DRAW);
 
     return ubo;
-}
-
-[[nodiscard]] constexpr unsigned int align_up(unsigned int value,
-                                              unsigned int alignment) noexcept
-{
-    assert((alignment & (alignment - 1)) == 0);
-    return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
 #ifndef __EMSCRIPTEN__
@@ -1077,7 +1022,7 @@ void Application::init()
                            &window_state.framebuffer_width,
                            &window_state.framebuffer_height);
 
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
 
     load_gl_functions();
 
@@ -1155,29 +1100,12 @@ void Application::init()
 
     accumulation_texture =
         create_accumulation_texture(texture_width, texture_height);
-#ifndef NO_COMPUTE_SHADER
-    glBindImageTexture(0,
-                       accumulation_texture.get(),
-                       0,
-                       GL_FALSE,
-                       0,
-                       GL_READ_WRITE,
-                       GL_RGBA32F);
-#endif
 
     target_texture = create_target_texture(texture_width, texture_height);
-#ifndef NO_COMPUTE_SHADER
-    glBindImageTexture(
-        5, target_texture.get(), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
-#endif
 
-#ifndef NO_COMPUTE_SHADER
-    trace_program = create_trace_compute_program(glsl_version, scene);
-#else
-    trace_program = create_trace_graphics_program(glsl_version, scene);
+    trace_program = create_trace_program(glsl_version, scene);
     empty_vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
     loc_image_size = glGetUniformLocation(trace_program.get(), "image_size");
-#endif
 
     loc_sample_index =
         glGetUniformLocation(trace_program.get(), "sample_index");
@@ -1187,17 +1115,14 @@ void Application::init()
         glGetUniformLocation(trace_program.get(), "view_position");
     loc_view_size = glGetUniformLocation(trace_program.get(), "view_size");
 
-#ifndef NO_COMPUTE_SHADER
-    post_program = create_post_compute_program(glsl_version);
-#else
-    post_program = create_post_graphics_program(glsl_version);
+    post_program = create_program(
+        glsl_version, "shaders/fullscreen.vert", "shaders/post.glsl");
 
     glUseProgram(post_program.get());
     glUniform1i(
         glGetUniformLocation(post_program.get(), "accumulation_texture"), 0);
 
     float_fbo = create_framebuffer(accumulation_texture.get());
-#endif
 
     fbo = create_framebuffer(target_texture.get());
 
@@ -1235,12 +1160,12 @@ void Application::init()
     // with a new size (when adding or removing objects).
     std::tie(vao, vbo, ibo) = create_vertex_index_buffers(raster_geometry);
 
-    circle_program = create_graphics_program(
+    circle_program = create_program(
         glsl_version, "shaders/shader.vert", "shaders/circle.frag");
-    line_program = create_graphics_program(
+    line_program = create_program(
         glsl_version, "shaders/shader.vert", "shaders/line.frag");
-    arc_program = create_graphics_program(
-        glsl_version, "shaders/shader.vert", "shaders/arc.frag");
+    arc_program =
+        create_program(glsl_version, "shaders/shader.vert", "shaders/arc.frag");
     loc_view_position_draw_circle =
         glGetUniformLocation(circle_program.get(), "view_position");
     loc_view_size_draw_circle =
@@ -1263,6 +1188,14 @@ void Application::main_loop_update()
 {
     constexpr unsigned int max_samples {200'000};
 
+    // FIXME: this doesn't work with Emscripten (scroll_offset is always zero
+    // after glfwPollEvents), because the callback is actually called
+    // asynchronously and not necessarily when we call glfwPollEvents.
+    // We should call glfwPollEvents as the very first thing in this function,
+    // such that behaviour will appear identical whether event callbacks are
+    // called synchronously or not. And note from GLFW's documentation:
+    // "Do not assume that callbacks you set will _only_ be called in response
+    // to event processing functions like this one [glfwPollEvents]"
     window_state.scroll_offset = 0.0f;
     glfwPollEvents();
 
@@ -1439,21 +1372,6 @@ void Application::main_loop_update()
         glUniform2f(loc_view_position, scene.view_x, scene.view_y);
         glUniform2f(loc_view_size, scene.view_width, scene.view_height);
 
-#ifndef NO_COMPUTE_SHADER
-        unsigned int num_groups_x {
-            align_up(static_cast<unsigned int>(texture_width), 16) / 16,
-        };
-        unsigned int num_groups_y {
-            align_up(static_cast<unsigned int>(texture_height), 16) / 16,
-        };
-
-        glDispatchCompute(num_groups_x, num_groups_y, 1);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-        glUseProgram(post_program.get());
-        glDispatchCompute(num_groups_x, num_groups_y, 1);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-#else
         glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
         glUniform2ui(loc_image_size,
                      static_cast<unsigned int>(texture_width),
@@ -1479,7 +1397,6 @@ void Application::main_loop_update()
         glUseProgram(post_program.get());
 
         glDrawArrays(GL_TRIANGLES, 0, 3);
-#endif
 
         sample_index += samples_this_frame;
         sum_samples += samples_this_frame;
@@ -1548,6 +1465,7 @@ void Application::main_loop_update()
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+    // FIXME: shouldn't this be removed when using Emscripten?
     glfwSwapBuffers(window.get());
 
     ++num_frames;

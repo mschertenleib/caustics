@@ -116,6 +116,9 @@ if (TARGET_WEB)
         --shell-file ${CMAKE_SOURCE_DIR}/src/shell.html
         --preload-file ${CMAKE_SOURCE_DIR}/src/shaders/@shaders/
     )
+    #FIXME: do we need other flags? Also we probably shouldn't link imgui with the static glfw if we build for web
+    target_compile_options(imgui PRIVATE --use-port=contrib.glfw3)
+    target_link_options(imgui PRIVATE --use-port=contrib.glfw3)
 else ()
     target_link_libraries(caustics PRIVATE glfw)
 

@@ -1,11 +1,6 @@
 
 precision highp float;
 
-#ifdef COMPUTE_SHADER
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
-#endif
-
-
 struct Material
 {
     vec3 color;
@@ -44,25 +39,18 @@ struct Hit
 };
 
 
-#ifdef COMPUTE_SHADER
-layout(rgba32f, binding = 0) uniform restrict image2D accumulation_image;
-#endif
-
 layout(std140) uniform Materials { Material materials[MATERIAL_COUNT]; };
 layout(std140) uniform Circles { Circle circles[CIRCLE_COUNT]; };
 layout(std140) uniform Lines { Line lines[LINE_COUNT]; };
 layout(std140) uniform Arcs { Arc arcs[ARC_COUNT]; };
 
-
 uniform int sample_index;
 uniform int samples_per_frame;
 uniform vec2 view_position;
 uniform vec2 view_size;
-
-#ifndef COMPUTE_SHADER
 uniform uvec2 image_size;
+
 out vec4 out_color;
-#endif
 
 
 #define PI 3.1415926535897931
@@ -411,19 +399,9 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
 
 void main()
 {
-#ifdef COMPUTE_SHADER
-    uvec2 image_size = imageSize(accumulation_image);
-    if (gl_GlobalInvocationID.x >= image_size.x || gl_GlobalInvocationID.y >= image_size.y)
-    {
-        return;
-    }
-    uvec2 pixel = gl_GlobalInvocationID.xy;
-#else
     uvec2 pixel = uvec2(gl_FragCoord.xy);
-#endif
-
     uint pixel_index = pixel.y * image_size.x + pixel.x;
-    uint rng_state = hash(pixel_index) + hash(uint(sample_index));
+    uint rng_state = hash(pixel_index) ^ hash(uint(sample_index));
 
     vec4 accumulated_color = vec4(0.0);
     for (int i = 0; i < samples_per_frame; ++i)
@@ -435,11 +413,5 @@ void main()
         accumulated_color += vec4(radiance(ray_origin, ray_direction, rng_state), 1.0);
     }
     
-#ifdef COMPUTE_SHADER
-    vec4 average_color = imageLoad(accumulation_image, ivec2(gl_GlobalInvocationID.xy));
-    average_color = (average_color * sample_index + accumulated_color) / (sample_index + samples_per_frame);
-    imageStore(accumulation_image, ivec2(gl_GlobalInvocationID.xy), average_color);
-#else
     out_color = accumulated_color / float(samples_per_frame);
-#endif
 }
