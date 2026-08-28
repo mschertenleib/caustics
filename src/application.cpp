@@ -1,6 +1,6 @@
 #include "application.hpp"
 #include "scene.hpp"
-#include "unique_resource.hpp"
+#include "unique_handle.hpp"
 #include "vec.hpp"
 
 #ifdef __EMSCRIPTEN__
@@ -285,44 +285,44 @@ struct Application
     void init();
     void main_loop_update();
 
-    Unique_resource<bool, GLFW_deleter> glfw_context {};
-    Unique_resource<struct GLFWwindow *, Window_deleter> window {};
-    Unique_resource<bool, ImGui_deleter> imgui_context {};
-    Unique_resource<bool, ImGui_glfw_deleter> imgui_glfw_context {};
-    Unique_resource<bool, ImGui_opengl_deleter> imgui_opengl_context {};
+    Unique_handle<bool, GLFW_deleter> glfw_context {};
+    Unique_handle<struct GLFWwindow *, Window_deleter> window {};
+    Unique_handle<bool, ImGui_deleter> imgui_context {};
+    Unique_handle<bool, ImGui_glfw_deleter> imgui_glfw_context {};
+    Unique_handle<bool, ImGui_opengl_deleter> imgui_opengl_context {};
     Window_state window_state {};
     bool auto_workload {};
     int texture_width {};
     int texture_height {};
     Scene scene {};
-    Unique_resource<GLuint, GL_array_deleter> accumulation_texture {};
-    Unique_resource<GLuint, GL_array_deleter> target_texture {};
-    Unique_resource<GLuint, GL_deleter> trace_program {};
-    Unique_resource<GLuint, GL_array_deleter> empty_vao {};
+    Unique_handle<GLuint, GL_array_deleter> accumulation_texture {};
+    Unique_handle<GLuint, GL_array_deleter> target_texture {};
+    Unique_handle<GLuint, GL_deleter> trace_program {};
+    Unique_handle<GLuint, GL_array_deleter> empty_vao {};
     GLint loc_image_size {};
     GLint loc_sample_index {};
     GLint loc_samples_per_frame {};
     GLint loc_view_position {};
     GLint loc_view_size {};
-    Unique_resource<GLuint, GL_deleter> post_program {};
-    Unique_resource<GLuint, GL_array_deleter> float_fbo {};
-    Unique_resource<GLuint, GL_array_deleter> fbo {};
+    Unique_handle<GLuint, GL_deleter> post_program {};
+    Unique_handle<GLuint, GL_array_deleter> float_fbo {};
+    Unique_handle<GLuint, GL_array_deleter> fbo {};
 #ifndef __EMSCRIPTEN__
-    Unique_resource<GLuint, GL_array_deleter> query_start {};
-    Unique_resource<GLuint, GL_array_deleter> query_end {};
+    Unique_handle<GLuint, GL_array_deleter> query_start {};
+    Unique_handle<GLuint, GL_array_deleter> query_end {};
 #endif
-    Unique_resource<GLuint, GL_array_deleter> materials_ubo {};
-    Unique_resource<GLuint, GL_array_deleter> circles_ubo {};
-    Unique_resource<GLuint, GL_array_deleter> lines_ubo {};
-    Unique_resource<GLuint, GL_array_deleter> arcs_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> materials_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> circles_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> lines_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> arcs_ubo {};
     float thickness {}; // In fraction of the view height
     Raster_geometry raster_geometry {};
-    Unique_resource<GLuint, GL_array_deleter> vao {};
-    Unique_resource<GLuint, GL_array_deleter> vbo {};
-    Unique_resource<GLuint, GL_array_deleter> ibo {};
-    Unique_resource<GLuint, GL_deleter> circle_program {};
-    Unique_resource<GLuint, GL_deleter> line_program {};
-    Unique_resource<GLuint, GL_deleter> arc_program {};
+    Unique_handle<GLuint, GL_array_deleter> vao {};
+    Unique_handle<GLuint, GL_array_deleter> vbo {};
+    Unique_handle<GLuint, GL_array_deleter> ibo {};
+    Unique_handle<GLuint, GL_deleter> circle_program {};
+    Unique_handle<GLuint, GL_deleter> line_program {};
+    Unique_handle<GLuint, GL_deleter> arc_program {};
     GLint loc_view_position_draw_circle {};
     GLint loc_view_size_draw_circle {};
     GLint loc_view_position_draw_line {};
@@ -347,9 +347,9 @@ template <std::invocable C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, D &&destroy)
 {
 #ifdef __EMSCRIPTEN__
-    return Unique_resource(create(), GL_deleter {destroy.function});
+    return Unique_handle(create(), GL_deleter {destroy.function});
 #else
-    return Unique_resource(create(), GL_deleter {destroy});
+    return Unique_handle(create(), GL_deleter {destroy});
 #endif
 }
 
@@ -357,9 +357,9 @@ template <std::invocable<GLenum> C, std::invocable<GLuint> D>
 [[nodiscard]] auto create_object(C &&create, GLenum arg, D &&destroy)
 {
 #ifdef __EMSCRIPTEN__
-    return Unique_resource(create(arg), GL_deleter {destroy.function});
+    return Unique_handle(create(arg), GL_deleter {destroy.function});
 #else
-    return Unique_resource(create(arg), GL_deleter {destroy});
+    return Unique_handle(create(arg), GL_deleter {destroy});
 #endif
 }
 
@@ -370,9 +370,9 @@ template <std::invocable<GLsizei, GLuint *> C,
     GLuint object {};
     create(1, &object);
 #ifdef __EMSCRIPTEN__
-    return Unique_resource(object, GL_array_deleter {destroy.function});
+    return Unique_handle(object, GL_array_deleter {destroy.function});
 #else
-    return Unique_resource(object, GL_array_deleter {destroy});
+    return Unique_handle(object, GL_array_deleter {destroy});
 #endif
 }
 
@@ -1009,7 +1009,7 @@ void Application::init()
     {
         throw std::runtime_error("Failed to initialize GLFW");
     }
-    glfw_context = decltype(glfw_context)(true);
+    glfw_context.reset(true);
 
 #ifdef __EMSCRIPTEN__
     // WebGL 2.0
@@ -1035,7 +1035,7 @@ void Application::init()
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
-    window = decltype(window)(window_ptr);
+    window.reset(window_ptr);
 
     glfwMakeContextCurrent(window.get());
 
@@ -1053,7 +1053,7 @@ void Application::init()
                            &window_state.framebuffer_width,
                            &window_state.framebuffer_height);
 
-    glfwSwapInterval(0);
+    glfwSwapInterval(1);
 
     load_gl_functions();
 
@@ -1104,7 +1104,7 @@ void Application::init()
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    imgui_context = decltype(imgui_context)(true);
+    imgui_context.reset(true);
 
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
@@ -1113,7 +1113,7 @@ void Application::init()
     {
         throw std::runtime_error("ImGui: failed to initialize GLFW backend");
     }
-    imgui_glfw_context = decltype(imgui_glfw_context)(true);
+    imgui_glfw_context.reset(true);
 
 #ifdef __EMSCRIPTEN__
     ImGui_ImplGlfw_InstallEmscriptenCallbacks(window.get(), "#canvas");
@@ -1123,7 +1123,7 @@ void Application::init()
     {
         throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
     }
-    imgui_opengl_context = decltype(imgui_opengl_context)(true);
+    imgui_opengl_context.reset(true);
 
     texture_width = 320;
     texture_height = 240;
@@ -1368,6 +1368,7 @@ void Application::main_loop_update()
         ImGui::Text("%.3f ms/frame (%.2f fps)",
                     static_cast<double>(1000.0f / ImGui::GetIO().Framerate),
                     static_cast<double>(ImGui::GetIO().Framerate));
+        ImGui::Text("%u samples/frame", samples_per_frame);
         ImGui::Text("%u samples", sample_index);
 
         ImGui::Checkbox("Draw geometry", &draw_geometry);

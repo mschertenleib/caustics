@@ -39,10 +39,11 @@ struct Hit
 };
 
 
-layout(std140) uniform Materials { Material materials[MATERIAL_COUNT]; };
-layout(std140) uniform Circles { Circle circles[CIRCLE_COUNT]; };
-layout(std140) uniform Lines { Line lines[LINE_COUNT]; };
-layout(std140) uniform Arcs { Arc arcs[ARC_COUNT]; };
+// FIXME
+layout(std140) uniform Materials { Material materials[MATERIAL_COUNT > 0 ? MATERIAL_COUNT : 1]; };
+layout(std140) uniform Circles { Circle circles[CIRCLE_COUNT > 0 ? CIRCLE_COUNT : 1]; };
+layout(std140) uniform Lines { Line lines[LINE_COUNT > 0 ? LINE_COUNT : 1]; };
+layout(std140) uniform Arcs { Arc arcs[ARC_COUNT > 0 ? ARC_COUNT : 1]; };
 
 uniform int sample_index;
 uniform int samples_per_frame;
