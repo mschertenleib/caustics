@@ -48,7 +48,7 @@ Scene create_scene(int texture_width, int texture_height)
     const auto view_height = 1.0f * static_cast<float>(texture_height) /
                              static_cast<float>(texture_width);
 
-#if 0
+#if 1
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,

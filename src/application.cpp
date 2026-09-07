@@ -1218,6 +1218,141 @@ void Application::init()
     draw_geometry = true;
 }
 
+void make_scene_ui(Scene &scene,
+                   bool &materials_changed,
+                   bool &circles_changed,
+                   bool &lines_changed,
+                   bool &arcs_changed)
+{
+    // FIXME
+    auto edit_vec2 = [](const char *label, vec2 &v)
+    { return ImGui::DragFloat2(label, &v.x, 0.01f); };
+
+    // FIXME
+    auto edit_vec3 = [](const char *label, vec3 &v)
+    { return ImGui::DragFloat3(label, &v.x, 0.01f); };
+
+    // FIXME
+    auto edit_color = [](const char *label, vec3 &v)
+    { return ImGui::ColorEdit3(label, &v.x); };
+
+    auto edit_material_id = [](const char *label, std::uint32_t &id)
+    { return ImGui::InputScalar(label, ImGuiDataType_U32, &id); };
+
+    if (ImGui::TreeNode("Materials"))
+    {
+        for (std::size_t i = 0; i < scene.materials.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            Material &m = scene.materials[i];
+
+            if (ImGui::TreeNode("Material"))
+            {
+                if (edit_color("Base color", m.base_color))
+                    materials_changed = true;
+                if (edit_vec3("Emissivity", m.emissivity))
+                    materials_changed = true;
+                if (ImGui::SliderFloat(
+                        "Metallic", &m.metallic, 0.0f, 1.0f, "%.2f"))
+                    materials_changed = true;
+                if (ImGui::SliderFloat(
+                        "Roughness", &m.roughness, 0.0f, 1.0f, "%.2f"))
+                    materials_changed = true;
+                if (ImGui::SliderFloat(
+                        "Transmission", &m.transmission, 0.0f, 1.0f, "%.2f"))
+                    materials_changed = true;
+                if (ImGui::DragFloat("IOR", &m.ior, 0.01f, 0.0f, 0.0f, "%.2f"))
+                    materials_changed = true;
+
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Circles"))
+    {
+        for (std::size_t i = 0; i < scene.circles.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            Circle &c = scene.circles[i];
+
+            if (ImGui::TreeNode("Circle"))
+            {
+                if (edit_vec2("center", c.center))
+                    circles_changed = true;
+                if (ImGui::DragFloat("radius", &c.radius, 0.01f, 0.0f))
+                    circles_changed = true;
+                if (edit_material_id("material_id", c.material_id))
+                    circles_changed = true;
+
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Lines"))
+    {
+        for (std::size_t i = 0; i < scene.lines.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            Line &l = scene.lines[i];
+
+            if (ImGui::TreeNode("Line"))
+            {
+                if (edit_vec2("a", l.a))
+                    lines_changed = true;
+                if (edit_vec2("b", l.b))
+                    lines_changed = true;
+                if (edit_material_id("material_id", l.material_id))
+                    lines_changed = true;
+
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Arcs"))
+    {
+        for (std::size_t i = 0; i < scene.arcs.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            Arc &a = scene.arcs[i];
+
+            if (ImGui::TreeNode("Arc"))
+            {
+                if (edit_vec2("center", a.center))
+                    arcs_changed = true;
+                if (ImGui::DragFloat("radius", &a.radius, 0.01f))
+                    arcs_changed = true;
+                if (edit_vec2("a", a.a))
+                    arcs_changed = true;
+                if (ImGui::DragFloat("b", &a.b, 0.01f))
+                    arcs_changed = true;
+                if (edit_material_id("material_id", a.material_id))
+                    arcs_changed = true;
+
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::TreePop();
+    }
+}
+
 void Application::main_loop_update()
 {
     constexpr unsigned int max_samples {200'000};
@@ -1367,6 +1502,10 @@ void Application::main_loop_update()
     ImGui::NewFrame();
 
     bool do_post_process {false};
+    bool materials_changed {};
+    bool circles_changed {};
+    bool lines_changed {};
+    bool arcs_changed {};
 
     if (ImGui::Begin("UI"))
     {
@@ -1380,10 +1519,21 @@ void Application::main_loop_update()
 
         do_post_process = ImGui::SliderFloat(
             "Exposure", &exposure_value, -6.0f, 6.0f, "%.1f");
+
+        make_scene_ui(scene,
+                      materials_changed,
+                      circles_changed,
+                      lines_changed,
+                      arcs_changed);
     }
     ImGui::End();
 
     ImGui::Render();
+
+    if (materials_changed || circles_changed || lines_changed || arcs_changed)
+    {
+        sample_index = 0;
+    }
 
 #ifndef __EMSCRIPTEN__
     if (auto_workload)
@@ -1400,6 +1550,25 @@ void Application::main_loop_update()
 
     if (do_render)
     {
+        const auto update_ubo =
+            [this]<typename T>(GLuint ubo, const std::vector<T> &data)
+        {
+            glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+            glBufferSubData(GL_UNIFORM_BUFFER,
+                            0,
+                            static_cast<GLsizeiptr>(data.size() * sizeof(T)),
+                            data.data());
+            // glBindBuffer(GL_UNIFORM_BUFFER, 0);
+        };
+        if (materials_changed)
+            update_ubo(materials_ubo.get(), scene.materials);
+        if (circles_changed)
+            update_ubo(circles_ubo.get(), scene.circles);
+        if (lines_changed)
+            update_ubo(lines_ubo.get(), scene.lines);
+        if (arcs_changed)
+            update_ubo(arcs_ubo.get(), scene.arcs);
+
         const auto samples_this_frame =
             std::min(samples_per_frame, max_samples - sample_index);
         glUseProgram(trace_program.get());
