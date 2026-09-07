@@ -305,6 +305,8 @@ struct Application
     GLint loc_view_position {};
     GLint loc_view_size {};
     Unique_handle<GLuint, GL_deleter> post_program {};
+    GLint loc_exposure_value {};
+    float exposure_value {};
     Unique_handle<GLuint, GL_array_deleter> float_fbo {};
     Unique_handle<GLuint, GL_array_deleter> fbo {};
 #ifndef __EMSCRIPTEN__
@@ -906,7 +908,7 @@ void create_raster_geometry(const Scene &scene,
         const auto top_left = circle.center + vec2 {-half_side, half_side};
         const auto rel_thickness = thickness / half_side;
 
-        const auto color = scene.materials[circle.material_id].color;
+        const auto color = scene.materials[circle.material_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -942,7 +944,7 @@ void create_raster_geometry(const Scene &scene,
         const auto end_right = line.b - delta_left + delta_up;
         const auto aspect_ratio = line_length / thickness;
 
-        const auto color = scene.materials[line.material_id].color;
+        const auto color = scene.materials[line.material_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -979,7 +981,7 @@ void create_raster_geometry(const Scene &scene,
         const auto cutoff = arc.b / half_side;
         const auto bottom_coord = bottom_y / half_side;
 
-        const auto color = scene.materials[arc.material_id].color;
+        const auto color = scene.materials[arc.material_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -1137,7 +1139,6 @@ void Application::init()
     trace_program = create_trace_program(glsl_version, scene);
     empty_vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
     loc_image_size = glGetUniformLocation(trace_program.get(), "image_size");
-
     loc_sample_index =
         glGetUniformLocation(trace_program.get(), "sample_index");
     loc_samples_per_frame =
@@ -1148,6 +1149,8 @@ void Application::init()
 
     post_program = create_program(
         glsl_version, "shaders/fullscreen.vert", "shaders/post.glsl");
+    loc_exposure_value =
+        glGetUniformLocation(post_program.get(), "exposure_value");
 
     glUseProgram(post_program.get());
     glUniform1i(
@@ -1363,6 +1366,8 @@ void Application::main_loop_update()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    bool do_post_process {false};
+
     if (ImGui::Begin("UI"))
     {
         ImGui::Text("%.3f ms/frame (%.2f fps)",
@@ -1372,6 +1377,9 @@ void Application::main_loop_update()
         ImGui::Text("%u samples", sample_index);
 
         ImGui::Checkbox("Draw geometry", &draw_geometry);
+
+        do_post_process = ImGui::SliderFloat(
+            "Exposure", &exposure_value, -6.0f, 6.0f, "%.1f");
     }
     ImGui::End();
 
@@ -1387,7 +1395,10 @@ void Application::main_loop_update()
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    if (sample_index < max_samples)
+    const auto do_render = sample_index < max_samples;
+    do_post_process = do_post_process || do_render;
+
+    if (do_render)
     {
         const auto samples_this_frame =
             std::min(samples_per_frame, max_samples - sample_index);
@@ -1412,20 +1423,24 @@ void Application::main_loop_update()
         glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
 
         glViewport(0, 0, texture_width, texture_height);
-
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+        sample_index += samples_this_frame;
+        sum_samples += samples_this_frame;
+    }
+
+    if (do_post_process)
+    {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
         glUseProgram(post_program.get());
-
+        glUniform1f(loc_exposure_value, exposure_value);
+        glBindVertexArray(empty_vao.get());
+        glViewport(0, 0, texture_width, texture_height);
         glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        sample_index += samples_this_frame;
-        sum_samples += samples_this_frame;
     }
 
     glViewport(viewport.x, viewport.y, viewport.width, viewport.height);

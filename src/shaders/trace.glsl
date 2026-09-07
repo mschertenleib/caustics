@@ -3,9 +3,12 @@ precision highp float;
 
 struct Material
 {
-    vec3 color;
+    vec3 base_color;
+    float metallic;
+    float roughness;
+    float transmission;
+    float ior;
     vec3 emissivity;
-    int type;
 };
 
 struct Circle
@@ -55,10 +58,6 @@ out vec4 out_color;
 
 
 #define PI 3.1415926535897931
-
-#define DIFFUSE 0
-#define SPECULAR 1
-#define DIELECTRIC 2
 
 #define GEOMETRY_NONE 0
 #define GEOMETRY_CIRCLE 1
@@ -208,6 +207,8 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out int ge
     return geometry_type != GEOMETRY_NONE;
 }
 
+// FIXME: this might be completely irrelevant in our 2D case
+
 // This uses the technique by Carsten Wächter and
 // Nikolaus Binder from "A Fast and Robust Method for Avoiding
 // Self-Intersection" from Ray Tracing Gems (version 1.7, 2020).
@@ -250,6 +251,7 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, in
     case GEOMETRY_LINE:
     {
         Line line = lines[geometry_index];
+        // FIXME: can use mix() ?
         hit.position = line.a + u * (line.b - line.a);
         vec2 line_dir = normalize(line.b - line.a);
         hit.normal = vec2(line_dir.y, -line_dir.x);
@@ -275,22 +277,117 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, in
 
 vec2 reflect_diffuse(vec2 normal, inout uint rng_state)
 {
-#if 0 // Uniform
-    float angle = 2.0 * PI * random(rng_state);
-    return normalize(normal + vec2(cos(angle), sin(angle)));
-#else // Cosine weighted
     vec2 tangent = vec2(-normal.y, normal.x);
     float u = random(rng_state);
     float sin_theta = 2.0 * u - 1.0;
     float cos_theta = sqrt(1.0 - sin_theta * sin_theta);
     return cos_theta * normal + sin_theta * tangent;
-#endif
 }
 
-vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
+vec2 sample_ggx(vec2 normal, float roughness, inout uint rng_state)
 {
-    vec3 accumulated_color = vec3(0.0);
-    vec3 accumulated_reflectance = vec3(1.0);
+    float alpha = roughness * roughness;
+    float u = random(rng_state);
+    
+    // Inverse CDF of the 1D GGX slope distribution
+    float slope = alpha * tan(PI * (u - 0.5));
+    
+    vec2 tangent = vec2(-normal.y, normal.x);
+
+    // Half-vector (microfacet normal)
+    vec2 h = normalize(normal - slope * tangent);
+    return h;
+}
+
+void evaluate_material(
+    Hit hit,
+    Material mat,
+    inout vec2 ray_origin,
+    inout vec2 ray_dir,
+    inout vec3 throughput,
+    inout uint rng_state)
+{
+    // hit.normal: object normal, defining "inside" and "outside" where relevant
+    // normal:     front-facing normal as seen by the incoming ray
+    bool into = dot(ray_dir, hit.normal) < 0.0;
+    vec2 normal = into ? hit.normal : -hit.normal;
+
+    const float n_air = 1.0;
+    float n_mat = mat.ior;
+    float eta = into ? n_air / n_mat : n_mat / n_air;
+
+    // Microfacet normal
+    vec2 h = sample_ggx(normal, mat.roughness, rng_state);
+    
+    // Fresnel
+    float n_diff = n_mat - n_air;
+    float n_sum = n_mat + n_air;
+    float F0_dielectric = n_diff * n_diff / (n_sum * n_sum);
+    vec3 F0 = mix(vec3(F0_dielectric), mat.base_color, mat.metallic);
+    float abs_cos_I = min(abs(dot(ray_dir, h)), 1.0);
+    float cos_I_1m = 1.0 - abs_cos_I;
+    vec3 F = F0 + (1.0 - F0) * cos_I_1m * cos_I_1m * cos_I_1m * cos_I_1m * cos_I_1m;
+
+    // Masking ratio for importance sampled GGX
+    float k = mat.roughness * 0.5;
+    float n_dot_dir = max(dot(normal, -ray_dir), 1e-4);
+    float G_ratio = n_dot_dir / (n_dot_dir * (1.0 - k) + k);
+
+    float p_metal = mat.metallic;
+    float p_trans = (1.0 - mat.metallic) * mat.transmission;
+    float p_diffuse = (1.0 - mat.metallic) * (1.0 - mat.transmission);
+    float selector = random(rng_state);
+
+    if (selector < p_metal) // Metallic lobe
+    {
+        ray_dir = reflect(ray_dir, h);
+        throughput *= F * G_ratio;
+        ray_origin = offset_position_along_normal(hit.position, normal);
+    } 
+    else if (selector < p_metal + p_trans) // Transmissive lobe
+    {
+        float cos_I = -dot(ray_dir, h);
+        float sin_2T = eta * eta * (1.0 - cos_I * cos_I);
+        
+        vec2 refracted_dir = vec2(0.0);
+        bool can_refract = false;
+        if (sin_2T <= 1.0) // No total internal reflection
+        {
+            float cos_T = sqrt(1.0 - sin_2T);
+            refracted_dir = eta * ray_dir + (eta * cos_I - cos_T) * h;
+            can_refract = true;
+        }
+
+        float F_avg = (F.r + F.g + F.b) / 3.0;
+
+        if (!can_refract || random(rng_state) < F_avg)
+        {
+            // Reflection
+            ray_dir = reflect(ray_dir, h);
+            throughput *= G_ratio; 
+            ray_origin = offset_position_along_normal(hit.position, normal);
+        } 
+        else
+        {
+            // Refraction
+            ray_dir = refracted_dir;
+            throughput *= mat.base_color * G_ratio * eta;
+            ray_origin = offset_position_along_normal(hit.position, -normal);
+        }
+    }
+    else // Diffuse lobe
+    {
+        ray_dir = reflect_diffuse(normal, rng_state);
+        throughput *= mat.base_color;
+        ray_origin = offset_position_along_normal(hit.position, normal);
+    }
+}
+
+#if 1
+vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
+{
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
 
     const int max_depth = 32;
     for (int depth = 0; depth <= max_depth; ++depth)
@@ -303,15 +400,15 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
 
         if (!is_hit)
         {
-            return accumulated_color;
+            return radiance;
         }
 
         Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
         Material material = materials[hit.material_id];
         
-        accumulated_color += accumulated_reflectance * material.emissivity;
+        radiance += throughput * material.emissivity;
 
-        vec3 color = material.color;
+        vec3 color = material.base_color;
         float max_color = max(color.r, max(color.g, color.b));
         // Russian Roulette ray termination
         if (random(rng_state) < max_color && depth < max_depth)
@@ -320,38 +417,78 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
         }
         else
         {
-            return accumulated_color;
+            return radiance;
+        }
+        throughput *= color;
+
+        evaluate_material(hit, material, origin, direction, throughput, rng_state);
+    }
+
+    // NOTE: this is unreachable. If we reach the last iteration,
+    // we will return before computing a new ray.
+    return radiance;
+}
+#else
+vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
+{
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+
+    const int max_depth = 32;
+    for (int depth = 0; depth <= max_depth; ++depth)
+    {
+        float t;
+        float u;
+        int geometry_type;
+        int geometry_index;
+        bool is_hit = intersect(origin, direction, t, u, geometry_type, geometry_index);
+
+        if (!is_hit)
+        {
+            return radiance;
         }
 
-        accumulated_reflectance *= color;
+        Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
+        Material material = materials[hit.material_id];
+        
+        radiance += throughput * material.emissivity;
 
-        // hit.normal: object normal, defining "inside" and "outside" for relevant
-        //             primitives (circles and dielectric primitives)
+        vec3 color = material.base_color;
+        float max_color = max(color.r, max(color.g, color.b));
+        // Russian Roulette ray termination
+        if (random(rng_state) < max_color && depth < max_depth)
+        {
+            color /= max_color;
+        }
+        else
+        {
+            return radiance;
+        }
+
+        throughput *= color;
+
+        // hit.normal: object normal, defining "inside" and "outside" for relevant primitives
         // normal:     front-facing normal as seen by the incoming ray
         bool into = dot(direction, hit.normal) < 0.0;
         vec2 normal = into ? hit.normal : -hit.normal;
         
-        switch (material.type)
-        {
-        case DIFFUSE:
+        // FIXME
+        if (material.roughness > 0.0f)
         {
             origin = offset_position_along_normal(hit.position, normal);
             direction = reflect_diffuse(normal, rng_state);
-            break;
         }
-        case SPECULAR:
+        else if (material.metallic > 0.0f)
         {
             origin = offset_position_along_normal(hit.position, normal);
             direction = reflect(direction, normal);
-            break;
         }
-        case DIELECTRIC:
+        else if (material.transmission > 0.0f)
         {
             vec2 reflected_dir = reflect(direction, hit.normal);
 
             const float n_air = 1.0;
-            const float n_glass = 1.5;
-            float n_ratio = into ? n_air / n_glass : n_glass / n_air;
+            float n_ratio = into ? n_air / material.ior : material.ior / n_air;
             float dir_dot_normal = dot(direction, normal);
             float cos2t = 1.0 - n_ratio * n_ratio * (1.0 - dir_dot_normal * dir_dot_normal);
             // Total internal reflection
@@ -365,8 +502,8 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
             vec2 transmitted_dir = normalize(direction * n_ratio - hit.normal *
                 ((into ? 1.0 : -1.0) * (dir_dot_normal * n_ratio + sqrt(cos2t))));
 
-            float a = n_glass - n_air;
-            float b = n_glass + n_air;
+            float a = material.ior - n_air;
+            float b = material.ior + n_air;
             float R0 = a * a / (b * b);
             float c = 1.0 - (into ? -dir_dot_normal : dot(transmitted_dir, hit.normal));
             float Re = R0 + (1.0 - R0) * c * c * c * c * c;
@@ -376,7 +513,7 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
             float TP = Tr / (1.0 - P);
             if (random(rng_state) < P)
             {
-                accumulated_reflectance *= RP;
+                throughput *= RP;
                 // FIXME: I feel like we should be using hit.normal here.
                 // We should really double check the entire refraction code.
                 origin = offset_position_along_normal(hit.position, normal);
@@ -384,19 +521,23 @@ vec3 radiance(vec2 origin, vec2 direction, inout uint rng_state)
             }
             else
             {
-                accumulated_reflectance *= TP;
+                throughput *= TP;
                 origin = offset_position_along_normal(hit.position, -normal);
                 direction = transmitted_dir;
             }
-            break;
         }
+        else
+        {
+            // FIXME: remove this, this is just temporarily to terminate rays that hit unhandled materials
+            continue;
         }
     }
 
     // NOTE: this is unreachable. If we reach the last iteration,
     // we will return before computing a new ray.
-    return accumulated_color;
+    return radiance;
 }
+#endif
 
 void main()
 {
@@ -411,7 +552,8 @@ void main()
         vec2 ray_origin = view_position + (uv - 0.5) * view_size;
         float angle = 2.0 * PI * random(rng_state);
         vec2 ray_direction = vec2(cos(angle), sin(angle));
-        accumulated_color += vec4(radiance(ray_origin, ray_direction, rng_state), 1.0);
+        vec3 radiance = compute_radiance(ray_origin, ray_direction, rng_state);
+        accumulated_color += vec4(radiance, 1.0);
     }
     
     out_color = accumulated_color / float(samples_per_frame);

@@ -2,6 +2,9 @@
 precision highp float;
 
 uniform sampler2D accumulation_texture;
+
+uniform float exposure_value;
+
 out vec4 out_color;
 
 
@@ -53,6 +56,6 @@ vec3 tone_map(vec3 color)
 
 void main()
 {
-    vec4 color = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
-    out_color = vec4(tone_map(color.rgb), 1.0);
+    vec3 color = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0).rgb;
+    out_color = vec4(tone_map(color * exp2(exposure_value)), 1.0);
 }

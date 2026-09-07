@@ -33,7 +33,8 @@ void from_json(const json &j, vec3 &v)
     j.at(2).get_to(v.z);
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Material, color, emissivity, type)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
+    Material, base_color, metallic, roughness, transmission, ior, emissivity)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Circle, center, radius, material_id)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Line, a, b, material_id)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Arc, center, radius, a, b, material_id)
@@ -47,21 +48,48 @@ Scene create_scene(int texture_width, int texture_height)
     const auto view_height = 1.0f * static_cast<float>(texture_height) /
                              static_cast<float>(texture_width);
 
-#if 1
+#if 0
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
         .view_width = view_width,
         .view_height = view_height,
-        .materials =
-            {Material {{0.75f, 0.75f, 0.75f},
-                       {6.0f, 6.0f, 6.0f},
-                       Material_type::diffuse},
-             Material {{0.75f, 0.55f, 0.25f}, {}, Material_type::dielectric},
-             Material {{0.25f, 0.75f, 0.75f}, {}, Material_type::dielectric},
-             Material {{1.0f, 0.0f, 1.0f}, {}, Material_type::specular},
-             Material {{0.75f, 0.75f, 0.75f}, {}, Material_type::diffuse},
-             Material {{1.0f, 1.0f, 1.0f}, {}, Material_type::dielectric}},
+        .materials = {Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .metallic = 0.0f,
+                                .roughness = 1.0f,
+                                .transmission = 0.0f,
+                                .ior = 1.0f,
+                                .emissivity = {6.0f, 6.0f, 6.0f}},
+                      Material {.base_color = {0.75f, 0.55f, 0.25f},
+                                .metallic = 0.0f,
+                                .roughness = 0.0f,
+                                .transmission = 1.0f,
+                                .ior = 1.5f,
+                                .emissivity = {}},
+                      Material {.base_color = {0.25f, 0.75f, 0.75f},
+                                .metallic = 0.0f,
+                                .roughness = 0.0f,
+                                .transmission = 1.0f,
+                                .ior = 1.5f,
+                                .emissivity = {}},
+                      Material {.base_color = {0.75f, 0.25f, 0.75f},
+                                .metallic = 1.0f,
+                                .roughness = 0.0f,
+                                .transmission = 0.0f,
+                                .ior = 1.0f,
+                                .emissivity = {}},
+                      Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .metallic = 0.0f,
+                                .roughness = 1.0f,
+                                .transmission = 0.0f,
+                                .ior = 1.0f,
+                                .emissivity = {}},
+                      Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                .metallic = 0.0f,
+                                .roughness = 0.0f,
+                                .transmission = 1.0f,
+                                .ior = 1.5f,
+                                .emissivity = {}}},
         .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
                     Circle {{0.5f, 0.3f}, 0.15f, 1},
                     Circle {{0.8f, 0.2f}, 0.05f, 2}},
@@ -75,14 +103,18 @@ Scene create_scene(int texture_width, int texture_height)
                  3},
             Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
             Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
-#elif 1
+#elif 0
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
         .view_width = view_width,
         .view_height = view_height,
-        .materials = {Material {
-            {0.75f, 0.75f, 0.75f}, {6.0f, 6.0f, 6.0f}, Material_type::diffuse}},
+        .materials = {Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .metallic = 0.0f,
+                                .roughness = 1.0f,
+                                .transmission = 0.0f,
+                                .ior = 1.0f,
+                                .emissivity = {6.0f, 6.0f, 6.0f}}},
         .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
         .lines = {},
         .arcs = {}};
@@ -91,11 +123,21 @@ Scene create_scene(int texture_width, int texture_height)
                  .view_y = view_y,
                  .view_width = view_width,
                  .view_height = view_height,
-                 .materials = {Material {{0.75f, 0.75f, 0.75f},
-                                         {6.0f, 6.0f, 6.0f},
-                                         Material_type::diffuse}},
+                 .materials = {Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                         .metallic = 0.0f,
+                                         .roughness = 1.0f,
+                                         .transmission = 0.0f,
+                                         .ior = 1.0f,
+                                         .emissivity = {6.0f, 6.0f, 6.0f}},
+                               Material {.base_color = {0.25f, 0.75f, 0.75f},
+                                         .metallic = 1.0f,
+                                         .roughness = 0.0f,
+                                         .transmission = 0.0f,
+                                         .ior = 1.0f,
+                                         .emissivity = {}}},
                  .circles = {},
-                 .lines = {Line {{0.2f, 0.3f}, {0.25f, 0.4f}, 0}},
+                 .lines = {Line {{0.2f, 0.3f}, {0.23f, 0.4f}, 0},
+                           Line {{0.4f, 0.2f}, {0.7f, 0.4f}, 1}},
                  .arcs = {}};
 #endif
 
