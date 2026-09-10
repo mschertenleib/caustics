@@ -1,6 +1,8 @@
 
 precision highp float;
 
+
+
 struct Material
 {
     vec3 base_color;
@@ -41,6 +43,7 @@ struct Hit
 };
 
 
+
 // FIXME
 layout(std140) uniform Materials { Material materials[MATERIAL_COUNT > 0 ? MATERIAL_COUNT : 1]; };
 layout(std140) uniform Circles { Circle circles[CIRCLE_COUNT > 0 ? CIRCLE_COUNT : 1]; };
@@ -56,18 +59,18 @@ uniform uvec2 image_size;
 out vec4 out_color;
 
 
-#define PI 3.1415926535897931
 
-// FIXME: use const values instead
+const float pi = 3.1415926535897931;
 
-#define GEOMETRY_NONE 0
-#define GEOMETRY_CIRCLE 1
-#define GEOMETRY_LINE 2
-#define GEOMETRY_ARC 3
+const int geometry_none = 0;
+const int geometry_circle = 1;
+const int geometry_line = 2;
+const int geometry_arc = 3;
 
-#define MATERIAL_DIFFUSE 0
-#define MATERIAL_SPECULAR 1
-#define MATERIAL_DIELECTRIC 2
+const int material_diffuse = 0;
+const int material_specular = 1;
+const int material_dielectric = 2;
+
 
 
 uint hash(uint x)
@@ -82,12 +85,14 @@ uint hash(uint x)
 
 float random(inout uint rng_state)
 {
-    // Returns a value uniformly sampled from [0.0, 1.0]
-    // NOTE: can return 1.0 because of floating-point rounding !
+    // Returns a value uniformly sampled in [0.0, 1.0)
+
     rng_state ^= rng_state << 13;
     rng_state ^= rng_state >> 17;
     rng_state ^= rng_state << 5;
-    return float(rng_state) / 4294967296.0;
+
+    const float inv_2_24 = 1.0 / 16777216.0;
+    return float(rng_state >> 8u) * inv_2_24;
 }
 
 bool intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius, inout float t)
@@ -181,14 +186,14 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out int ge
 {
     t = 1e6;
     u = 0.0;
-    geometry_type = GEOMETRY_NONE;
+    geometry_type = geometry_none;
     geometry_index = -1;
 
     for (int i = 0; i < CIRCLE_COUNT; ++i)
     {
         if (intersect_circle(origin, direction, circles[i].center, circles[i].radius, t))
         {
-            geometry_type = GEOMETRY_CIRCLE;
+            geometry_type = geometry_circle;
             geometry_index = i;
         }
     }
@@ -196,7 +201,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out int ge
     {
         if (intersect_line(origin, direction, lines[i].a, lines[i].b, t, u))
         {
-            geometry_type = GEOMETRY_LINE;
+            geometry_type = geometry_line;
             geometry_index = i;
         }
     }
@@ -204,12 +209,12 @@ bool intersect(vec2 origin, vec2 direction, out float t, out float u, out int ge
     {
         if (intersect_arc(origin, direction, arcs[i].center, arcs[i].radius, arcs[i].a, arcs[i].b, t))
         {
-            geometry_type = GEOMETRY_ARC;
+            geometry_type = geometry_arc;
             geometry_index = i;
         }
     }
 
-    return geometry_type != GEOMETRY_NONE;
+    return geometry_type != geometry_none;
 }
 
 // FIXME: this might be completely irrelevant in our 2D case
@@ -241,7 +246,7 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, in
 
     switch(geometry_type)
     {
-    case GEOMETRY_CIRCLE:
+    case geometry_circle:
     {
         Circle circle = circles[geometry_index];
         hit.position = origin + t * direction;
@@ -253,7 +258,7 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, in
         hit.material_id = circle.material_id;
         break;
     }
-    case GEOMETRY_LINE:
+    case geometry_line:
     {
         Line line = lines[geometry_index];
         // FIXME: can use mix() ?
@@ -263,7 +268,7 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, in
         hit.material_id = line.material_id;
         break;
     }
-    case GEOMETRY_ARC:
+    case geometry_arc:
     {
         Arc arc = arcs[geometry_index];
         hit.position = origin + t * direction;
@@ -296,7 +301,7 @@ vec2 sample_ggx(vec2 normal, float roughness, inout uint rng_state)
     float u = random(rng_state);
     
     // Inverse CDF of the 1D GGX slope distribution
-    float slope = alpha * tan(PI * (u - 0.5));
+    float slope = alpha * tan(pi * (u - 0.5));
     
     vec2 tangent = vec2(-normal.y, normal.x);
 
@@ -390,10 +395,6 @@ void evaluate_material(
 }
 
 
-#define PI_HALF (0.5 * PI)
-#define EPS     1e-6
-
-
 // -----------------------------------------------------------------------------
 // 2D cosine-weighted diffuse sampling
 // -----------------------------------------------------------------------------
@@ -426,7 +427,7 @@ vec2 sample_diffuse(vec2 normal, inout uint rng_state)
 
 float logistic_cdf(float theta, float s)
 {
-    float t = tanh(PI / (4.0 * s));
+    float t = tanh(pi / (4.0 * s));
     return 0.5 * (1.0 + tanh(theta / (2.0 * s)) / t);
 }
 
@@ -862,19 +863,19 @@ void evaluate_material(
     
     switch (material.type)
     {
-        case MATERIAL_DIFFUSE:
+        case material_diffuse:
         {
             ray_origin = offset_position_along_normal(hit.position, normal);
             ray_dir = sample_diffuse(normal, rng_state);
             break;
         }
-        case MATERIAL_SPECULAR:
+        case material_specular:
         {
             ray_origin = offset_position_along_normal(hit.position, normal);
             ray_dir = reflect(ray_dir, normal);
             break;
         }
-        case MATERIAL_DIELECTRIC:
+        case material_dielectric:
         {
             vec2 reflected_dir = reflect(ray_dir, hit.normal);
 
@@ -975,7 +976,7 @@ void main()
     {
         vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
         vec2 ray_origin = view_position + (uv - 0.5) * view_size;
-        float angle = 2.0 * PI * random(rng_state);
+        float angle = 2.0 * pi * random(rng_state);
         vec2 ray_direction = vec2(cos(angle), sin(angle));
         vec3 radiance = compute_radiance(ray_origin, ray_direction, rng_state);
         accumulated_color += radiance;

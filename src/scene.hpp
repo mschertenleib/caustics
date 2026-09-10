@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-enum struct Material_type : std::uint32_t
+enum struct Material_type : std::int32_t
 {
     diffuse,
     specular,
