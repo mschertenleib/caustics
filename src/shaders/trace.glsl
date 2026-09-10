@@ -4,11 +4,10 @@ precision highp float;
 struct Material
 {
     vec3 base_color;
-    float metallic;
-    float roughness;
-    float transmission;
+    vec3 emissive_color;
+    float emissive_strength;
+    uint type;
     float ior;
-    vec3 emissivity;
 };
 
 struct Circle
@@ -59,10 +58,16 @@ out vec4 out_color;
 
 #define PI 3.1415926535897931
 
+// FIXME: use const values instead
+
 #define GEOMETRY_NONE 0
 #define GEOMETRY_CIRCLE 1
 #define GEOMETRY_LINE 2
 #define GEOMETRY_ARC 3
+
+#define MATERIAL_DIFFUSE 0
+#define MATERIAL_SPECULAR 1
+#define MATERIAL_DIELECTRIC 2
 
 
 uint hash(uint x)
@@ -275,7 +280,8 @@ Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, in
     return hit;
 }
 
-vec2 reflect_diffuse(vec2 normal, inout uint rng_state)
+#if 0
+vec2 sample_diffuse(vec2 normal, inout uint rng_state)
 {
     vec2 tangent = vec2(-normal.y, normal.x);
     float u = random(rng_state);
@@ -377,13 +383,542 @@ void evaluate_material(
     }
     else // Diffuse lobe
     {
-        ray_dir = reflect_diffuse(normal, rng_state);
+        ray_dir = sample_diffuse(normal, rng_state);
         throughput *= mat.base_color;
         ray_origin = offset_position_along_normal(hit.position, normal);
     }
 }
 
-#if 1
+
+#define PI_HALF (0.5 * PI)
+#define EPS     1e-6
+
+
+// -----------------------------------------------------------------------------
+// 2D cosine-weighted diffuse sampling
+// -----------------------------------------------------------------------------
+
+vec2 sample_diffuse(vec2 normal, inout uint rng_state)
+{
+    vec2 tangent = vec2(-normal.y, normal.x);
+
+    float u = random(rng_state);
+
+    // PDF(theta) = cos(theta) / 2
+    float sin_theta = 2.0 * u - 1.0;
+    float cos_theta = sqrt(max(0.0, 1.0 - sin_theta * sin_theta));
+
+    return cos_theta * normal + sin_theta * tangent;
+}
+
+
+// -----------------------------------------------------------------------------
+// Logistic 2D microfacet distribution
+//
+// D(theta) = [1 / (4s)] coth(pi / (4s)) sech^2(theta / (2s))
+//
+// theta is the signed angle between the microfacet normal and the macroscopic
+// surface normal.
+//
+// Unlike 3D GGX, this is specifically chosen because it has a tractable,
+// normalized 2D representation.
+// -----------------------------------------------------------------------------
+
+float logistic_cdf(float theta, float s)
+{
+    float t = tanh(PI / (4.0 * s));
+    return 0.5 * (1.0 + tanh(theta / (2.0 * s)) / t);
+}
+
+
+float sample_logistic_visible_normal(
+    float theta_i,
+    float roughness,
+    inout uint rng_state)
+{
+    // All microfacet normals satisfying dot(wi, h) > 0.
+    //
+    // If theta_i is the angle of wi relative to the macroscopic normal,
+    // the visible interval is:
+    //
+    // theta_min = max(theta_i, 0) - pi/2
+    // theta_max = min(theta_i, 0) + pi/2
+
+    float theta_min = max(theta_i, 0.0) - PI_HALF;
+    float theta_max = min(theta_i, 0.0) + PI_HALF;
+
+    // Avoid an exactly zero roughness value.
+    float s = max(roughness, 1e-4);
+
+    float a = tanh(theta_min / (2.0 * s));
+    float b = tanh(theta_max / (2.0 * s));
+
+    float u = random(rng_state);
+
+    float x = mix(a, b, u);
+
+    return 2.0 * s * atanh(x);
+}
+
+
+vec2 sample_visible_microfacet(
+    vec2 wi,
+    vec2 normal,
+    float roughness,
+    inout uint rng_state)
+{
+    vec2 tangent = vec2(-normal.y, normal.x);
+
+    // wi = sin(theta_i) * tangent + cos(theta_i) * normal
+    float sin_theta_i = dot(wi, tangent);
+    float theta_i = asin(clamp(sin_theta_i, -1.0, 1.0));
+
+    float theta_h =
+        sample_logistic_visible_normal(
+            theta_i,
+            roughness,
+            rng_state);
+
+    return sin(theta_h) * tangent + cos(theta_h) * normal;
+}
+
+
+// -----------------------------------------------------------------------------
+// Exact dielectric Fresnel
+//
+// cos_i is measured against the microfacet normal and is positive.
+// eta = n_i / n_t.
+// -----------------------------------------------------------------------------
+
+float dielectric_fresnel(
+    float cos_i,
+    float eta,
+    out bool total_internal_reflection)
+{
+    cos_i = clamp(cos_i, 0.0, 1.0);
+
+    float sin2_i = max(0.0, 1.0 - cos_i * cos_i);
+    float sin2_t = eta * eta * sin2_i;
+
+    if (sin2_t >= 1.0)
+    {
+        total_internal_reflection = true;
+        return 1.0;
+    }
+
+    total_internal_reflection = false;
+
+    float cos_t = sqrt(max(0.0, 1.0 - sin2_t));
+
+    float rs =
+        (cos_i - eta * cos_t) /
+        (cos_i + eta * cos_t);
+
+    float rp =
+        (eta * cos_i - cos_t) /
+        (eta * cos_i + cos_t);
+
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+
+// -----------------------------------------------------------------------------
+// Refraction through a microfacet.
+//
+// wi points away from the surface, i.e. toward the previous path vertex.
+// h points into the incident medium.
+// eta = n_i / n_t.
+//
+// Returns false on TIR.
+// -----------------------------------------------------------------------------
+
+bool refract_microfacet(
+    vec2 wi,
+    vec2 h,
+    float eta,
+    out vec2 wo)
+{
+    float cos_i = dot(wi, h);
+
+    if (cos_i <= 0.0)
+        return false;
+
+    float sin2_t = eta * eta * max(0.0, 1.0 - cos_i * cos_i);
+
+    if (sin2_t >= 1.0)
+        return false;
+
+    float cos_t = sqrt(max(0.0, 1.0 - sin2_t));
+
+    // wi and h are on the incident side.
+    // The resulting wo is on the transmitted side.
+    wo = -eta * wi + (eta * cos_i - cos_t) * h;
+
+    return true;
+}
+
+
+// -----------------------------------------------------------------------------
+// Reflection from a microfacet.
+// -----------------------------------------------------------------------------
+
+vec2 reflect_microfacet(vec2 wi, vec2 h)
+{
+    // wi points away from the surface.
+    // The reflected direction is also away from the surface.
+    return 2.0 * dot(wi, h) * h - wi;
+}
+
+
+// -----------------------------------------------------------------------------
+// Main material evaluation
+//
+// Direction convention:
+//     ray_dir : direction in which the path ray travels
+//     wi      : direction away from the surface toward the previous vertex
+//
+// Thus:
+//     wi = -ray_dir
+//
+// The implementation uses three material classes:
+//
+//     metallic      -> colored rough conductor
+//     transmission  -> rough dielectric
+//     diffuse       -> 2D Lambertian
+//
+// Metallic is treated as a mixture weight, rather than simultaneously being
+// used as both a mixture probability and an F0 interpolation parameter.
+// -----------------------------------------------------------------------------
+
+void evaluate_material(
+    Hit hit,
+    Material mat,
+    inout vec2 ray_origin,
+    inout vec2 ray_dir,
+    inout vec3 throughput,
+    inout uint rng_state)
+{
+    // -------------------------------------------------------------------------
+    // Orient the normal toward the incident side.
+    // -------------------------------------------------------------------------
+
+    bool entering = dot(ray_dir, hit.normal) < 0.0;
+
+    vec2 n = entering ? hit.normal : -hit.normal;
+
+    // wi points away from the surface.
+    vec2 wi = -ray_dir;
+
+    // -------------------------------------------------------------------------
+    // Material mixture.
+    //
+    // Metallic is a conductor-vs-dielectric mixture.
+    // Transmission determines whether the dielectric component is diffuse
+    // or transmissive.
+    // -------------------------------------------------------------------------
+
+    float p_metal = clamp(mat.metallic, 0.0, 1.0);
+
+    float p_transmission =
+        (1.0 - p_metal) *
+        clamp(mat.transmission, 0.0, 1.0);
+
+    float p_diffuse =
+        (1.0 - p_metal) *
+        (1.0 - clamp(mat.transmission, 0.0, 1.0));
+
+    float selector = random(rng_state);
+
+
+    // =========================================================================
+    // METAL
+    // =========================================================================
+
+    if (selector < p_metal)
+    {
+        // For a conductor, use the base color as the normal-incidence
+        // reflectance. This is the usual RGB metallic workflow approximation.
+        //
+        // Unlike a dielectric, there is no transmission.
+
+        vec2 h =
+            sample_visible_microfacet(
+                wi,
+                n,
+                mat.roughness,
+                rng_state);
+
+        float cos_i = max(dot(wi, h), 0.0);
+
+        if (cos_i <= EPS)
+        {
+            throughput = vec3(0.0);
+            return;
+        }
+
+        // Schlick conductor approximation.
+        vec3 F =
+            mat.base_color +
+            (vec3(1.0) - mat.base_color) *
+            pow(1.0 - cos_i, 5.0);
+
+        vec2 wo = reflect_microfacet(wi, h);
+
+        // The visible-normal sampling procedure only samples microfacets
+        // visible from wi. Nevertheless, reject numerical invalid samples.
+        float cos_o = dot(wo, n);
+
+        if (cos_o <= EPS)
+        {
+            throughput = vec3(0.0);
+            return;
+        }
+
+        // This is analog sampling of the rough-mirror model:
+        // the sampled branch carries its Fresnel/conductor reflectance.
+        //
+        // Since p_metal is the actual mixture weight, it does not need to
+        // appear here again.
+        throughput *= F;
+
+        ray_dir = wo;
+        ray_origin =
+            offset_position_along_normal(
+                hit.position,
+                n);
+
+        return;
+    }
+
+
+    // =========================================================================
+    // DIELECTRIC TRANSMISSION
+    // =========================================================================
+
+    if (selector < p_metal + p_transmission)
+    {
+        // The oriented normal points into the incident medium.
+        //
+        // For a ray entering the material:
+        //     n_i = air
+        //     n_t = material
+        //
+        // For a ray leaving it:
+        //     n_i = material
+        //     n_t = air
+
+        float n_i = entering ? 1.0 : mat.ior;
+        float n_t = entering ? mat.ior : 1.0;
+
+        float eta = n_i / n_t;
+
+        vec2 h =
+            sample_visible_microfacet(
+                wi,
+                n,
+                mat.roughness,
+                rng_state);
+
+        float cos_i = dot(wi, h);
+
+        if (cos_i <= EPS)
+        {
+            throughput = vec3(0.0);
+            return;
+        }
+
+        bool tir;
+        float F =
+            dielectric_fresnel(
+                cos_i,
+                eta,
+                tir);
+
+        // ---------------------------------------------------------------------
+        // Reflection
+        // ---------------------------------------------------------------------
+
+        if (tir || random(rng_state) < F)
+        {
+            vec2 wo = reflect_microfacet(wi, h);
+
+            if (dot(wo, n) <= EPS)
+            {
+                throughput = vec3(0.0);
+                return;
+            }
+
+            // IMPORTANT:
+            //
+            // F is a scalar here, and it is exactly the probability with
+            // which reflection was selected. Therefore the Fresnel factor
+            // cancels against the roulette probability.
+            //
+            // The base color is used as the transmitted tint below, not here.
+
+            ray_dir = wo;
+            ray_origin =
+                offset_position_along_normal(
+                    hit.position,
+                    n);
+
+            return;
+        }
+
+
+        // ---------------------------------------------------------------------
+        // Refraction
+        // ---------------------------------------------------------------------
+
+        vec2 wo;
+
+        if (!refract_microfacet(wi, h, eta, wo))
+        {
+            // Numerically possible only near the TIR boundary.
+            throughput = vec3(0.0);
+            return;
+        }
+
+        if (dot(wo, n) >= -EPS)
+        {
+            throughput = vec3(0.0);
+            return;
+        }
+
+        // Fresnel roulette already accounts for the (1-F) probability.
+        //
+        // base_color is used here as a simple transmission tint. This is a
+        // surface/thin-transmission approximation, not Beer-Lambert volume
+        // absorption.
+        throughput *= mat.base_color;
+
+        ray_dir = wo;
+        ray_origin =
+            offset_position_along_normal(
+                hit.position,
+                -n);
+
+        return;
+    }
+
+
+    // =========================================================================
+    // DIFFUSE
+    // =========================================================================
+
+    {
+        vec2 wo =
+            sample_diffuse(
+                n,
+                rng_state);
+
+        // 2D Lambertian:
+        //
+        //     f_d = base_color / 2
+        //
+        // cosine-weighted sampling:
+        //
+        //     p(wo) = cos(theta_o) / 2
+        //
+        // Therefore:
+        //
+        //     f_d cos(theta_o) / p(wo) = base_color
+
+        throughput *= mat.base_color;
+
+        ray_dir = wo;
+        ray_origin =
+            offset_position_along_normal(
+                hit.position,
+                n);
+    }
+}
+
+#endif
+
+
+
+vec2 sample_diffuse(vec2 normal, inout uint rng_state)
+{
+    vec2 tangent = vec2(-normal.y, normal.x);
+    float u = random(rng_state);
+    float sin_theta = 2.0 * u - 1.0;
+    float cos_theta = sqrt(1.0 - sin_theta * sin_theta);
+    return cos_theta * normal + sin_theta * tangent;
+}
+
+void evaluate_material(
+    Hit hit,
+    Material material,
+    inout vec2 ray_origin,
+    inout vec2 ray_dir,
+    inout vec3 throughput,
+    inout uint rng_state)
+{
+    // hit.normal: object normal, defining "inside" and "outside" for relevant primitives
+    // normal:     front-facing normal as seen by the incoming ray
+    bool into = dot(ray_dir, hit.normal) < 0.0;
+    vec2 normal = into ? hit.normal : -hit.normal;
+    
+    switch (material.type)
+    {
+        case MATERIAL_DIFFUSE:
+        {
+            ray_origin = offset_position_along_normal(hit.position, normal);
+            ray_dir = sample_diffuse(normal, rng_state);
+            break;
+        }
+        case MATERIAL_SPECULAR:
+        {
+            ray_origin = offset_position_along_normal(hit.position, normal);
+            ray_dir = reflect(ray_dir, normal);
+            break;
+        }
+        case MATERIAL_DIELECTRIC:
+        {
+            vec2 reflected_dir = reflect(ray_dir, hit.normal);
+
+            const float n_air = 1.0;
+            float n_ratio = into ? n_air / material.ior : material.ior / n_air;
+            float dir_dot_normal = dot(ray_dir, normal);
+            float cos2t = 1.0 - n_ratio * n_ratio * (1.0 - dir_dot_normal * dir_dot_normal);
+            // Total internal reflection
+            if (cos2t < 0.0)
+            {
+                ray_origin = offset_position_along_normal(hit.position, normal);
+                ray_dir = reflected_dir;
+                break;
+            }
+
+            vec2 transmitted_dir = normalize(ray_dir * n_ratio - hit.normal *
+                ((into ? 1.0 : -1.0) * (dir_dot_normal * n_ratio + sqrt(cos2t))));
+
+            float a = material.ior - n_air;
+            float b = material.ior + n_air;
+            float R0 = a * a / (b * b);
+            float c = 1.0 - (into ? -dir_dot_normal : dot(transmitted_dir, hit.normal));
+            float Re = R0 + (1.0 - R0) * c * c * c * c * c;
+            float Tr = 1.0 - Re;
+            float P = 0.25 + 0.5 * Re;
+            float RP = Re / P;
+            float TP = Tr / (1.0 - P);
+            if (random(rng_state) < P)
+            {
+                throughput *= RP;
+                ray_origin = offset_position_along_normal(hit.position, normal);
+                ray_dir = reflected_dir;
+            }
+            else
+            {
+                throughput *= TP;
+                ray_origin = offset_position_along_normal(hit.position, -normal);
+                ray_dir = transmitted_dir;
+            }
+            break;
+        }
+    }
+}
+
 vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
 {
     vec3 radiance = vec3(0.0);
@@ -406,7 +941,7 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
         Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
         Material material = materials[hit.material_id];
         
-        radiance += throughput * material.emissivity;
+        radiance += throughput * material.emissive_color * material.emissive_strength;
 
         vec3 color = material.base_color;
         float max_color = max(color.r, max(color.g, color.b));
@@ -428,116 +963,6 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
     // we will return before computing a new ray.
     return radiance;
 }
-#else
-vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
-{
-    vec3 radiance = vec3(0.0);
-    vec3 throughput = vec3(1.0);
-
-    const int max_depth = 32;
-    for (int depth = 0; depth <= max_depth; ++depth)
-    {
-        float t;
-        float u;
-        int geometry_type;
-        int geometry_index;
-        bool is_hit = intersect(origin, direction, t, u, geometry_type, geometry_index);
-
-        if (!is_hit)
-        {
-            return radiance;
-        }
-
-        Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
-        Material material = materials[hit.material_id];
-        
-        radiance += throughput * material.emissivity;
-
-        vec3 color = material.base_color;
-        float max_color = max(color.r, max(color.g, color.b));
-        // Russian Roulette ray termination
-        if (random(rng_state) < max_color && depth < max_depth)
-        {
-            color /= max_color;
-        }
-        else
-        {
-            return radiance;
-        }
-
-        throughput *= color;
-
-        // hit.normal: object normal, defining "inside" and "outside" for relevant primitives
-        // normal:     front-facing normal as seen by the incoming ray
-        bool into = dot(direction, hit.normal) < 0.0;
-        vec2 normal = into ? hit.normal : -hit.normal;
-        
-        // FIXME
-        if (material.roughness > 0.0f)
-        {
-            origin = offset_position_along_normal(hit.position, normal);
-            direction = reflect_diffuse(normal, rng_state);
-        }
-        else if (material.metallic > 0.0f)
-        {
-            origin = offset_position_along_normal(hit.position, normal);
-            direction = reflect(direction, normal);
-        }
-        else if (material.transmission > 0.0f)
-        {
-            vec2 reflected_dir = reflect(direction, hit.normal);
-
-            const float n_air = 1.0;
-            float n_ratio = into ? n_air / material.ior : material.ior / n_air;
-            float dir_dot_normal = dot(direction, normal);
-            float cos2t = 1.0 - n_ratio * n_ratio * (1.0 - dir_dot_normal * dir_dot_normal);
-            // Total internal reflection
-            if (cos2t < 0.0)
-            {
-                origin = offset_position_along_normal(hit.position, normal);
-                direction = reflected_dir;
-                continue;
-            }
-
-            vec2 transmitted_dir = normalize(direction * n_ratio - hit.normal *
-                ((into ? 1.0 : -1.0) * (dir_dot_normal * n_ratio + sqrt(cos2t))));
-
-            float a = material.ior - n_air;
-            float b = material.ior + n_air;
-            float R0 = a * a / (b * b);
-            float c = 1.0 - (into ? -dir_dot_normal : dot(transmitted_dir, hit.normal));
-            float Re = R0 + (1.0 - R0) * c * c * c * c * c;
-            float Tr = 1.0 - Re;
-            float P = 0.25 + 0.5 * Re;
-            float RP = Re / P;
-            float TP = Tr / (1.0 - P);
-            if (random(rng_state) < P)
-            {
-                throughput *= RP;
-                // FIXME: I feel like we should be using hit.normal here.
-                // We should really double check the entire refraction code.
-                origin = offset_position_along_normal(hit.position, normal);
-                direction = reflected_dir;
-            }
-            else
-            {
-                throughput *= TP;
-                origin = offset_position_along_normal(hit.position, -normal);
-                direction = transmitted_dir;
-            }
-        }
-        else
-        {
-            // FIXME: remove this, this is just temporarily to terminate rays that hit unhandled materials
-            continue;
-        }
-    }
-
-    // NOTE: this is unreachable. If we reach the last iteration,
-    // we will return before computing a new ray.
-    return radiance;
-}
-#endif
 
 void main()
 {
@@ -545,7 +970,7 @@ void main()
     uint pixel_index = pixel.y * image_size.x + pixel.x;
     uint rng_state = hash(pixel_index) ^ hash(uint(sample_index));
 
-    vec4 accumulated_color = vec4(0.0);
+    vec3 accumulated_color = vec3(0.0);
     for (int i = 0; i < samples_per_frame; ++i)
     {
         vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
@@ -553,8 +978,8 @@ void main()
         float angle = 2.0 * PI * random(rng_state);
         vec2 ray_direction = vec2(cos(angle), sin(angle));
         vec3 radiance = compute_radiance(ray_origin, ray_direction, rng_state);
-        accumulated_color += vec4(radiance, 1.0);
+        accumulated_color += radiance;
     }
     
-    out_color = accumulated_color / float(samples_per_frame);
+    out_color = vec4(accumulated_color, 1.0) / float(samples_per_frame);
 }

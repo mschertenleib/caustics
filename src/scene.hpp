@@ -9,14 +9,20 @@
 #include <string>
 #include <vector>
 
+enum struct Material_type : std::uint32_t
+{
+    diffuse,
+    specular,
+    dielectric
+};
+
 struct alignas(16) Material
 {
     alignas(16) vec3 base_color;
-    float metallic;
-    float roughness;
-    float transmission;
+    alignas(16) vec3 emissive_color;
+    float emissive_strength;
+    Material_type type;
     float ior;
-    alignas(16) vec3 emissivity;
 };
 
 struct alignas(16) Circle

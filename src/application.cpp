@@ -1248,20 +1248,28 @@ void make_scene_ui(Scene &scene,
 
             if (ImGui::TreeNode("Material"))
             {
+                constexpr const char *items[] {
+                    "Diffuse", "Specular", "Dielectric"};
+                auto current_item = static_cast<int>(m.type);
+                if (ImGui::Combo(
+                        "Type", &current_item, items, std::size(items)))
+                {
+                    m.type = static_cast<Material_type>(current_item);
+                    materials_changed = true;
+                }
+
                 if (edit_color("Base color", m.base_color))
                     materials_changed = true;
-                if (edit_vec3("Emissivity", m.emissivity))
+                if (edit_color("Emissive color", m.emissive_color))
                     materials_changed = true;
-                if (ImGui::SliderFloat(
-                        "Metallic", &m.metallic, 0.0f, 1.0f, "%.2f"))
+                if (ImGui::DragFloat("Emissive strength",
+                                     &m.emissive_strength,
+                                     0.01f,
+                                     0.0f,
+                                     100.0f,
+                                     "%.2f"))
                     materials_changed = true;
-                if (ImGui::SliderFloat(
-                        "Roughness", &m.roughness, 0.0f, 1.0f, "%.2f"))
-                    materials_changed = true;
-                if (ImGui::SliderFloat(
-                        "Transmission", &m.transmission, 0.0f, 1.0f, "%.2f"))
-                    materials_changed = true;
-                if (ImGui::DragFloat("IOR", &m.ior, 0.01f, 0.0f, 0.0f, "%.2f"))
+                if (ImGui::DragFloat("IOR", &m.ior, 0.01f, 1.0f, 3.0f, "%.2f"))
                     materials_changed = true;
 
                 ImGui::TreePop();
@@ -1284,7 +1292,7 @@ void make_scene_ui(Scene &scene,
             {
                 if (edit_vec2("center", c.center))
                     circles_changed = true;
-                if (ImGui::DragFloat("radius", &c.radius, 0.01f, 0.0f))
+                if (ImGui::DragFloat("radius", &c.radius, 0.01f, 0.0f, 1000.0f))
                     circles_changed = true;
                 if (edit_material_id("material_id", c.material_id))
                     circles_changed = true;
@@ -1334,7 +1342,7 @@ void make_scene_ui(Scene &scene,
             {
                 if (edit_vec2("center", a.center))
                     arcs_changed = true;
-                if (ImGui::DragFloat("radius", &a.radius, 0.01f))
+                if (ImGui::DragFloat("radius", &a.radius, 0.01f, 0.0f, 1000.0f))
                     arcs_changed = true;
                 if (edit_vec2("a", a.a))
                     arcs_changed = true;
