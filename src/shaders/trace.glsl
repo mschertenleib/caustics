@@ -83,10 +83,9 @@ uint hash(uint x)
     return x;
 }
 
+// Returns a value uniformly sampled in [0.0, 1.0)
 float random(inout uint rng_state)
 {
-    // Returns a value uniformly sampled in [0.0, 1.0)
-
     rng_state ^= rng_state << 13;
     rng_state ^= rng_state >> 17;
     rng_state ^= rng_state << 5;
@@ -374,13 +373,36 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
         if (!is_hit)
         {
             //const vec3 environment_emission = vec3(1.0, 1.0, 1.0);
-            //return radiance + throughput * environment_emission;
-            return radiance;
+            //radiance += throughput * environment_emission;
+            break;
         }
 
         Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
         Material material = materials[hit.material_id];
-        
+
+// FIXME
+// ALso should go before !is_hit check? Maybe unnecessary since we probably don't want
+// to allow scattering everywhere, even if this could technically be implied by some
+/// ill-formed, non-closed dielectric geometries).
+#if 0
+        if (material.type == material_dielectric && dot(direction, hit.normal) > 0.0)
+        {
+            const float sigma_a = 0.0;
+            const float sigma_s = 5.0;
+            const float sigma_t = sigma_a + sigma_s;
+            float scatter_distance = -log(1.0 - random(rng_state)) / sigma_t;
+            if (scatter_distance < t)
+            {
+                origin += direction * scatter_distance;
+                throughput *= sigma_s / sigma_t;
+                float angle = 2.0 * pi * random(rng_state);
+                direction = vec2(cos(angle), sin(angle));
+                continue;
+            }
+            throughput *= exp(-sigma_t * t);
+        }
+#endif
+
         radiance += throughput * material.emissive_color * material.emissive_strength;
 
         // Russian Roulette ray termination
@@ -390,7 +412,7 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
             survival_prob = max(survival_prob, 0.05);
             if (random(rng_state) >= survival_prob)
             {
-                return radiance;
+                break;
             }
 
             throughput /= survival_prob;
@@ -408,7 +430,7 @@ void main()
     uint pixel_index = pixel.y * image_size.x + pixel.x;
     uint rng_state = hash(pixel_index) ^ hash(uint(sample_index));
 
-    vec3 accumulated_color = vec3(0.0);
+    vec4 accumulated_color = vec4(0.0);
     for (int i = 0; i < samples_per_frame; ++i)
     {
         vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
@@ -416,8 +438,8 @@ void main()
         float angle = 2.0 * pi * random(rng_state);
         vec2 ray_direction = vec2(cos(angle), sin(angle));
         vec3 radiance = compute_radiance(ray_origin, ray_direction, rng_state);
-        accumulated_color += radiance;
+        accumulated_color += vec4(radiance, 1.0);
     }
-    
-    out_color = vec4(accumulated_color, 1.0) / float(samples_per_frame);
+
+    out_color = accumulated_color / float(samples_per_frame);
 }
