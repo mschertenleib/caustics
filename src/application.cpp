@@ -118,85 +118,15 @@ namespace
 #define ENUMERATE_GL_FUNCTIONS(f) ENUMERATE_GL_FUNCTIONS_COMMON(f)
 #endif
 
-PFNGLGETERRORPROC glGetError {nullptr};
-
-#ifndef __EMSCRIPTEN__
-
 // clang-format off
 #define DECLARE_GL_FUNCTION(type, name) type name {nullptr}
 // clang-format on
-
-#else
-
-void check_gl_error(
-    const std::source_location &loc = std::source_location::current())
-{
-    auto error = glGetError();
-    if (error == GL_NO_ERROR)
-    {
-        return;
-    }
-
-    std::cerr << loc.file_name() << ':' << loc.line() << ": ";
-    const char *sep {""};
-
-    do
-    {
-        std::cerr << sep;
-        switch (error)
-        {
-        case GL_INVALID_ENUM: std::cerr << "GL_INVALID_ENUM"; break;
-        case GL_INVALID_VALUE: std::cerr << "GL_INVALID_VALUE"; break;
-        case GL_INVALID_OPERATION: std::cerr << "GL_INVALID_OPERATION"; break;
-        case GL_INVALID_FRAMEBUFFER_OPERATION:
-            std::cerr << "GL_INVALID_FRAMEBUFFER_OPERATION";
-            break;
-        case GL_OUT_OF_MEMORY: std::cerr << "GL_OUT_OF_MEMORY"; break;
-        default: std::cerr << "GL error " << error; break;
-        }
-        sep = ", ";
-    } while ((error = glGetError()) != GL_NO_ERROR);
-
-    std::cerr << "\n";
-}
-
-template <typename T>
-struct GL_function;
-
-template <typename R, typename... Args>
-struct GL_function<R (*)(Args...)>
-{
-    R operator()(
-        Args... args,
-        const std::source_location &loc = std::source_location::current()) const
-    {
-        if constexpr (std::is_void_v<R>)
-        {
-            function(args...);
-            check_gl_error(loc);
-        }
-        else
-        {
-            R result {function(args...)};
-            check_gl_error(loc);
-            return result;
-        }
-    }
-
-    R (*function)(Args...);
-};
-
-// clang-format off
-#define DECLARE_GL_FUNCTION(type, name) GL_function<type> name {nullptr}
-// clang-format on
-
-#endif
 
 ENUMERATE_GL_FUNCTIONS(DECLARE_GL_FUNCTION)
 
 struct GLFW_deleter
 {
-    void operator()(bool)
+    void operator()()
     {
         glfwTerminate();
     }
@@ -212,7 +142,7 @@ struct Window_deleter
 
 struct ImGui_deleter
 {
-    void operator()(bool)
+    void operator()()
     {
         ImGui::DestroyContext();
     }
@@ -220,7 +150,7 @@ struct ImGui_deleter
 
 struct ImGui_glfw_deleter
 {
-    void operator()(bool)
+    void operator()()
     {
         ImGui_ImplGlfw_Shutdown();
     }
@@ -228,7 +158,7 @@ struct ImGui_glfw_deleter
 
 struct ImGui_opengl_deleter
 {
-    void operator()(bool)
+    void operator()()
     {
         ImGui_ImplOpenGL3_Shutdown();
     }
@@ -331,6 +261,7 @@ struct Application
     GLint loc_view_size_draw_line {};
     GLint loc_view_position_draw_arc {};
     GLint loc_view_size_draw_arc {};
+    unsigned int max_samples {200'000};
     unsigned int sample_index {};
     unsigned int samples_per_frame {};
     double last_time {};
@@ -346,36 +277,24 @@ struct Application
 };
 
 template <std::invocable C, std::invocable<GLuint> D>
-[[nodiscard]] auto create_object(C &&create, D &&destroy)
+[[nodiscard]] auto create_gl_object(C &&create, D &&destroy)
 {
-#ifdef __EMSCRIPTEN__
-    return Unique_handle(create(), GL_deleter {destroy.function});
-#else
     return Unique_handle(create(), GL_deleter {destroy});
-#endif
 }
 
 template <std::invocable<GLenum> C, std::invocable<GLuint> D>
-[[nodiscard]] auto create_object(C &&create, GLenum arg, D &&destroy)
+[[nodiscard]] auto create_gl_object(C &&create, GLenum arg, D &&destroy)
 {
-#ifdef __EMSCRIPTEN__
-    return Unique_handle(create(arg), GL_deleter {destroy.function});
-#else
     return Unique_handle(create(arg), GL_deleter {destroy});
-#endif
 }
 
 template <std::invocable<GLsizei, GLuint *> C,
           std::invocable<GLsizei, const GLuint *> D>
-[[nodiscard]] auto create_object(C &&create, D &&destroy)
+[[nodiscard]] auto create_gl_object(C &&create, D &&destroy)
 {
     GLuint object {};
     create(1, &object);
-#ifdef __EMSCRIPTEN__
-    return Unique_handle(object, GL_array_deleter {destroy.function});
-#else
     return Unique_handle(object, GL_array_deleter {destroy});
-#endif
 }
 
 struct Viewport
@@ -426,20 +345,11 @@ void glfw_scroll_callback(GLFWwindow *window,
 
 void load_gl_functions()
 {
-#ifdef __EMSCRIPTEN__
-#define LOAD_GL_FUNCTION(type, name)                                           \
-    name.function = reinterpret_cast<type>(glfwGetProcAddress(#name));         \
-    assert(name.function != nullptr)
-#else
 #define LOAD_GL_FUNCTION(type, name)                                           \
     name = reinterpret_cast<type>(glfwGetProcAddress(#name));                  \
     assert(name != nullptr)
-#endif
 
     ENUMERATE_GL_FUNCTIONS(LOAD_GL_FUNCTION)
-
-    glGetError =
-        reinterpret_cast<PFNGLGETERRORPROC>(glfwGetProcAddress("glGetError"));
 
 #undef LOAD_GL_FUNCTION
 }
@@ -522,7 +432,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                  std::size_t sources_size,
                                  const char *const sources[])
 {
-    auto shader = create_object(glCreateShader, type, glDeleteShader);
+    auto shader = create_gl_object(glCreateShader, type, glDeleteShader);
 
     glShaderSource(
         shader.get(), static_cast<GLsizei>(sources_size), sources, nullptr);
@@ -546,7 +456,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 [[nodiscard]] auto create_program_object(GLuint vertex_shader,
                                          GLuint fragment_shader)
 {
-    auto program = create_object(glCreateProgram, glDeleteProgram);
+    auto program = create_gl_object(glCreateProgram, glDeleteProgram);
 
     glAttachShader(program.get(), vertex_shader);
     glAttachShader(program.get(), fragment_shader);
@@ -622,7 +532,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
 [[nodiscard]] auto create_accumulation_texture(GLsizei width, GLsizei height)
 {
-    auto texture = create_object(glGenTextures, glDeleteTextures);
+    auto texture = create_gl_object(glGenTextures, glDeleteTextures);
 
     glBindTexture(GL_TEXTURE_2D, texture.get());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -645,7 +555,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
 [[nodiscard]] auto create_target_texture(GLsizei width, GLsizei height)
 {
-    auto texture = create_object(glGenTextures, glDeleteTextures);
+    auto texture = create_gl_object(glGenTextures, glDeleteTextures);
 
     glBindTexture(GL_TEXTURE_2D, texture.get());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -668,7 +578,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
 [[nodiscard]] auto create_framebuffer(GLuint texture)
 {
-    auto fbo = create_object(glGenFramebuffers, glDeleteFramebuffers);
+    auto fbo = create_gl_object(glGenFramebuffers, glDeleteFramebuffers);
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
     glFramebufferTexture2D(
@@ -720,10 +630,10 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
 [[nodiscard]] auto create_vertex_index_buffers(const Raster_geometry &geometry)
 {
-    auto vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
+    auto vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
     glBindVertexArray(vao.get());
 
-    auto vbo = create_object(glGenBuffers, glDeleteBuffers);
+    auto vbo = create_gl_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ARRAY_BUFFER, vbo.get());
     glBufferData(
         GL_ARRAY_BUFFER,
@@ -731,7 +641,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
         geometry.vertices.data(),
         GL_DYNAMIC_DRAW);
 
-    auto ibo = create_object(glGenBuffers, glDeleteBuffers);
+    auto ibo = create_gl_object(glGenBuffers, glDeleteBuffers);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo.get());
     glBufferData(
         GL_ELEMENT_ARRAY_BUFFER,
@@ -787,7 +697,7 @@ template <typename T>
 {
     constexpr std::size_t max_ubo_size {16'384};
 
-    auto ubo = create_object(glGenBuffers, glDeleteBuffers);
+    auto ubo = create_gl_object(glGenBuffers, glDeleteBuffers);
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo.get());
 
@@ -1137,7 +1047,7 @@ void Application::init()
     target_texture = create_target_texture(texture_width, texture_height);
 
     trace_program = create_trace_program(glsl_version, scene);
-    empty_vao = create_object(glGenVertexArrays, glDeleteVertexArrays);
+    empty_vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
     loc_image_size = glGetUniformLocation(trace_program.get(), "image_size");
     loc_sample_index =
         glGetUniformLocation(trace_program.get(), "sample_index");
@@ -1164,8 +1074,8 @@ void Application::init()
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 #ifndef __EMSCRIPTEN__
-    query_start = create_object(glGenQueries, glDeleteQueries);
-    query_end = create_object(glGenQueries, glDeleteQueries);
+    query_start = create_gl_object(glGenQueries, glDeleteQueries);
+    query_end = create_gl_object(glGenQueries, glDeleteQueries);
 #endif
 
     materials_ubo = create_uniform_buffer(scene.materials);
@@ -1227,10 +1137,6 @@ void make_scene_ui(Scene &scene,
     // FIXME
     auto edit_vec2 = [](const char *label, vec2 &v)
     { return ImGui::DragFloat2(label, &v.x, 0.01f); };
-
-    // FIXME
-    auto edit_vec3 = [](const char *label, vec3 &v)
-    { return ImGui::DragFloat3(label, &v.x, 0.01f); };
 
     // FIXME
     auto edit_color = [](const char *label, vec3 &v)
@@ -1363,8 +1269,6 @@ void make_scene_ui(Scene &scene,
 
 void Application::main_loop_update()
 {
-    constexpr unsigned int max_samples {200'000};
-
     // FIXME: this doesn't work with Emscripten (scroll_offset is always zero
     // after glfwPollEvents), because the callback is actually called
     // asynchronously and not necessarily when we call glfwPollEvents.
@@ -1523,10 +1427,54 @@ void Application::main_loop_update()
         ImGui::Text("%u samples/frame", samples_per_frame);
         ImGui::Text("%u samples", sample_index);
 
+        ImGui::SeparatorText("Render");
+
+        // FIXME
+        static int width {320};
+        static int height {240};
+        ImGui::SetNextItemWidth(60.0f);
+        if (ImGui::InputInt("px##image_width", &width, 0, 0))
+            width = std::clamp(width, 1, 4096);
+        ImGui::SameLine();
+        ImGui::TextUnformatted("x");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(60.0f);
+        if (ImGui::InputInt("px##image_height", &height, 0, 0))
+            height = std::clamp(height, 1, 4096);
+        ImGui::SameLine();
+        ImGui::Button("Apply");
+
+        ImGui::SetNextItemWidth(80.0f);
+        if (ImGui::InputScalar("Samples",
+                               ImGuiDataType_U32,
+                               &max_samples,
+                               nullptr,
+                               nullptr,
+                               "%u"))
+            max_samples = std::clamp(max_samples, 1u, 500'000u);
+
+        ImGui::SeparatorText("View");
+
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputFloat("X", &scene.view_x, 0.0f, 0.0f, "%.5g");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputFloat("Y", &scene.view_x, 0.0f, 0.0f, "%.5g");
+
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputFloat("Width", &scene.view_width, 0.0f, 0.0f, "%.5g");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputFloat("Height", &scene.view_height, 0.0f, 0.0f, "%.5g");
+
+        ImGui::SeparatorText("Post");
+
+        ImGui::SetNextItemWidth(200.0f);
+        do_post_process = ImGui::SliderFloat(
+            "Exposure", &exposure_value, -10.0f, 10.0f, "%.1f");
         ImGui::Checkbox("Draw geometry", &draw_geometry);
 
-        do_post_process = ImGui::SliderFloat(
-            "Exposure", &exposure_value, -6.0f, 6.0f, "%.1f");
+        ImGui::SeparatorText("Scene");
 
         make_scene_ui(scene,
                       materials_changed,
@@ -1559,7 +1507,7 @@ void Application::main_loop_update()
     if (do_render)
     {
         const auto update_ubo =
-            [this]<typename T>(GLuint ubo, const std::vector<T> &data)
+            []<typename T>(GLuint ubo, const std::vector<T> &data)
         {
             glBindBuffer(GL_UNIFORM_BUFFER, ubo);
             glBufferSubData(GL_UNIFORM_BUFFER,

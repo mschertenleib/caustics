@@ -48,7 +48,7 @@ Scene create_scene(int texture_width, int texture_height)
     const auto view_height = 1.0f * static_cast<float>(texture_height) /
                              static_cast<float>(texture_width);
 
-#if 1
+#if 0
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
@@ -98,6 +98,63 @@ Scene create_scene(int texture_width, int texture_height)
             Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
             Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
 #elif 1
+    constexpr vec2 light_center {0.8f, 0.5f};
+    constexpr float light_radius {0.003f};
+    constexpr float angle {std::numbers::pi_v<float> * 1.25f};
+    constexpr float lens_radius {0.06f};
+    constexpr float lens_half_thickness {0.002f};
+
+    const vec2 lens_dir {std::cos(angle), std::sin(angle)};
+    const auto lens_dist = lens_radius * 1.1f;
+    const auto lens_center = light_center + lens_dir * lens_dist;
+    const auto lens_offset = lens_radius - lens_half_thickness;
+    const auto lens_half_width =
+        std::sqrt(lens_radius * lens_radius - lens_offset * lens_offset);
+    const auto cover_radius =
+        std::sqrt(lens_dist * lens_dist + lens_half_width * lens_half_width);
+
+    Scene scene {
+        .view_x = view_x,
+        .view_y = view_y,
+        .view_width = view_width,
+        .view_height = view_height,
+        .materials = {Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                .emissive_color = {1.0f, 1.0f, 1.0f},
+                                .emissive_strength = 20.0f,
+                                .type = Material_type::diffuse,
+                                .ior = 1.0f},
+                      Material {.base_color = {0.0f, 0.0f, 0.0f},
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .type = Material_type::diffuse,
+                                .ior = 1.0f},
+                      Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .type = Material_type::dielectric,
+                                .ior = 1.5f},
+                      Material {.base_color = {1.0f, 0.75f, 0.5f},
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .type = Material_type::dielectric,
+                                .ior = 1.7f}},
+        .circles = {Circle {light_center, light_radius, 0}},
+        .lines = {Line {{5.0f, 0.3f}, {-4.0f, 0.3f}, 3},
+                  Line {{5.0f, 0.25f}, {-4.0f, 0.25f}, 3},
+                  Line {{-4.0f, 0.2f}, {5.0f, 0.2f}, 3},
+                  Line {{-4.0f, 0.15f}, {5.0f, 0.15f}, 3}},
+        .arcs = {Arc {light_center, cover_radius, -lens_dir, -lens_dist, 1},
+                 Arc {lens_center - lens_offset * lens_dir,
+                      lens_radius,
+                      lens_dir,
+                      lens_radius - lens_half_thickness,
+                      2},
+                 Arc {lens_center + lens_offset * lens_dir,
+                      lens_radius,
+                      -lens_dir,
+                      lens_radius - lens_half_thickness,
+                      2}}};
+#elif 1
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
@@ -108,7 +165,7 @@ Scene create_scene(int texture_width, int texture_height)
                 Material {.base_color = {0.75f, 0.75f, 0.75f},
                           .emissive_color = {1.0f, 1.0f, 1.0f},
                           .emissive_strength = 6.0f,
-                          .type = Material_type::dielectric,
+                          .type = Material_type::diffuse,
                           .ior = 1.0f},
                 Material {.base_color = {0.75f, 0.75f, 0.75f},
                           .emissive_color = {},

@@ -3,9 +3,9 @@ cmake_minimum_required(VERSION 3.19)
 project(caustics LANGUAGES CXX)
 
 
-set(TARGET_WEB OFF)
+set(TARGET_EMSCRIPTEN OFF)
 if(${CMAKE_SYSTEM_NAME} MATCHES "Emscripten")
-    set(TARGET_WEB ON)
+    set(TARGET_EMSCRIPTEN ON)
 endif()
 
 
@@ -33,7 +33,7 @@ include(${CPM_DOWNLOAD_LOCATION})
 find_package(OpenGL REQUIRED)
 
 
-if (NOT TARGET_WEB)
+if (NOT TARGET_EMSCRIPTEN)
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -52,8 +52,6 @@ CPMAddPackage(
 add_library(imgui STATIC)
 target_sources(imgui PRIVATE
         ${imgui_SOURCE_DIR}/imgui.cpp
-        ${imgui_SOURCE_DIR}/imgui.h
-        ${imgui_SOURCE_DIR}/imgui_internal.h
         ${imgui_SOURCE_DIR}/imgui_draw.cpp
         ${imgui_SOURCE_DIR}/imgui_tables.cpp
         ${imgui_SOURCE_DIR}/imgui_widgets.cpp
@@ -64,7 +62,6 @@ target_include_directories(imgui SYSTEM PUBLIC
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui PRIVATE glfw)
 
 
 CPMAddPackage(
@@ -93,33 +90,62 @@ target_include_directories(caustics SYSTEM PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(caustics PRIVATE imgui nlohmann_json::nlohmann_json)
 
 
-if (TARGET_WEB)
+if (TARGET_EMSCRIPTEN)
     set_target_properties(caustics PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/web)
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
     target_include_directories(caustics PRIVATE ${EMSCRIPTEN_ROOT_PATH}/sysroot/include)
+
     target_compile_options(caustics PRIVATE
-        -Os
-        -sDISABLE_EXCEPTION_CATCHING=0
         --use-port=contrib.glfw3
+        -fwasm-exceptions  # Remove if we can avoid exceptions entirely
+
+        $<$<CONFIG:Debug>:-O0>
+        $<$<CONFIG:Debug>:-g>
+
+        $<$<NOT:$<CONFIG:Debug>>:-O3>
+        $<$<NOT:$<CONFIG:Debug>>:-flto>
     )
+
     target_link_options(caustics PRIVATE
-        -Os
         -sWASM=1
         -sUSE_WEBGL2=1
         --use-port=contrib.glfw3
-        -sFULL_ES3=1
-        -sASSERTIONS=1
-        -sDISABLE_EXCEPTION_CATCHING=0
         -sFORCE_FILESYSTEM=1
-        -sALLOW_MEMORY_GROWTH=1
-        --emrun
         --shell-file ${CMAKE_SOURCE_DIR}/src/shell.html
         --preload-file ${CMAKE_SOURCE_DIR}/src/shaders/@shaders/
+        -fwasm-exceptions  # Remove if we can avoid exceptions entirely
+        -sALLOW_MEMORY_GROWTH=1
+
+        $<$<CONFIG:Debug>:-O0>
+        $<$<CONFIG:Debug>:-g>
+        $<$<CONFIG:Debug>:-sASSERTIONS=1>
+        $<$<CONFIG:Debug>:-sGL_ASSERTIONS=1>
+        $<$<CONFIG:Debug>:-sGL_DEBUG=1>
+        #$<$<CONFIG:Debug>:-sTRACE_WEBGL_CALLS=1>
+        $<$<CONFIG:Debug>:-sSAFE_HEAP=1>
+        $<$<CONFIG:Debug>:--emrun>
+
+        $<$<NOT:$<CONFIG:Debug>>:-O3>
+        $<$<NOT:$<CONFIG:Debug>>:-flto>
+        $<$<NOT:$<CONFIG:Debug>>:-sASSERTIONS=0>
     )
-    #FIXME: do we need other flags? Also we probably shouldn't link imgui with the static glfw if we build for web
-    target_compile_options(imgui PRIVATE --use-port=contrib.glfw3)
-    target_link_options(imgui PRIVATE --use-port=contrib.glfw3)
+
+    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_ES3)
+    target_compile_options(imgui PRIVATE
+        --use-port=contrib.glfw3
+        $<$<CONFIG:Debug>:-O0>
+        $<$<CONFIG:Debug>:-g>
+        $<$<NOT:$<CONFIG:Debug>>:-O3>
+        $<$<NOT:$<CONFIG:Debug>>:-flto>
+    )
+
+    # Needed because --preload-file is just an opaque link option,
+    # so a change to a shader won't trigger a linking step.
+    file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/shaders/*")
+    set_target_properties(caustics PROPERTIES LINK_DEPENDS "${SHADER_FILES}")
+
 else ()
+    target_link_libraries(imgui PRIVATE glfw)
     target_link_libraries(caustics PRIVATE glfw)
 
     add_custom_target(shaders ALL
@@ -162,9 +188,7 @@ else ()
     message(WARNING "No warnings set for compiler ${CMAKE_CXX_COMPILER_ID}")
 endif ()
 
-
-
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+if (NOT TARGET_EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     set(san_compile -fsanitize=address,undefined,float-divide-by-zero,integer-divide-by-zero -fno-omit-frame-pointer)
     set(san_link -fsanitize=address,undefined)
     

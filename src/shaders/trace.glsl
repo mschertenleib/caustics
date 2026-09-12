@@ -8,7 +8,7 @@ struct Material
     vec3 base_color;
     vec3 emissive_color;
     float emissive_strength;
-    uint type;
+    int type;
     float ior;
 };
 
@@ -372,13 +372,15 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
 
         if (!is_hit)
         {
-            //const vec3 environment_emission = vec3(1.0, 1.0, 1.0);
+            //const vec3 environment_emission = vec3(0.2, 0.2, 0.2);
             //radiance += throughput * environment_emission;
             break;
         }
 
         Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
         Material material = materials[hit.material_id];
+
+        // FIXME: we need to keep track of the IOR, not use vacuum.
 
 // FIXME
 // ALso should go before !is_hit check? Maybe unnecessary since we probably don't want
