@@ -34,10 +34,10 @@ void from_json(const json &j, vec3 &v)
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
-    Material, base_color, emissive_color, emissive_strength, type, ior)
+    Material, base_color, type, emissive_color, emissive_strength, ior)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Circle, center, radius, material_id)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Line, a, b, material_id)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Arc, center, radius, a, b, material_id)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Arc, center, radius, b, a, material_id)
 
 Scene create_scene(int texture_width, int texture_height)
 {
@@ -48,55 +48,141 @@ Scene create_scene(int texture_width, int texture_height)
     const auto view_height = 1.0f * static_cast<float>(texture_height) /
                              static_cast<float>(texture_width);
 
-#if 0
+#if 1
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
         .view_width = view_width,
         .view_height = view_height,
         .materials = {Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .type = Material_type::diffuse,
                                 .emissive_color = {1.0f, 1.0f, 1.0f},
                                 .emissive_strength = 6.0f,
-                                .type = Material_type::diffuse,
                                 .ior = 1.0f},
                       Material {.base_color = {0.75f, 0.55f, 0.25f},
+                                .type = Material_type::dielectric,
                                 .emissive_color = {},
                                 .emissive_strength = 0.0f,
-                                .type = Material_type::dielectric,
                                 .ior = 1.5f},
                       Material {.base_color = {0.25f, 0.75f, 0.75f},
+                                .type = Material_type::dielectric,
                                 .emissive_color = {},
                                 .emissive_strength = 0.0f,
-                                .type = Material_type::dielectric,
                                 .ior = 1.5f},
                       Material {.base_color = {0.75f, 0.25f, 0.75f},
+                                .type = Material_type::specular,
                                 .emissive_color = {},
                                 .emissive_strength = 0.0f,
-                                .type = Material_type::specular,
                                 .ior = 1.0f},
                       Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .type = Material_type::diffuse,
                                 .emissive_color = {},
                                 .emissive_strength = 0.0f,
-                                .type = Material_type::diffuse,
                                 .ior = 1.0f},
                       Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                .type = Material_type::dielectric,
                                 .emissive_color = {},
                                 .emissive_strength = 0.0f,
-                                .type = Material_type::dielectric,
                                 .ior = 1.5f}},
         .circles = {Circle {{0.8f, 0.5f}, 0.03f, 0},
                     Circle {{0.5f, 0.3f}, 0.15f, 1},
                     Circle {{0.8f, 0.2f}, 0.05f, 2}},
         .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
                   Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
-        .arcs = {
-            Arc {{0.6f, 0.6f},
-                 0.1f,
-                 {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
-                 -0.04f,
-                 3},
-            Arc {{0.25f, 0.32f - 0.075f}, 0.1f, {0.0f, 1.0f}, 0.075f, 5},
-            Arc {{0.25f, 0.32f + 0.075f}, 0.1f, {0.0f, -1.0f}, 0.075f, 5}}};
+        .arcs = {Arc {.center = {0.6f, 0.6f},
+                      .radius = 0.1f,
+                      .b = -0.04f,
+                      .a = {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
+                      .material_id = 3},
+                 Arc {.center = {0.25f, 0.32f - 0.075f},
+                      .radius = 0.1f,
+                      .b = 0.075f,
+                      .a = {0.0f, 1.0f},
+                      .material_id = 5},
+                 Arc {.center = {0.25f, 0.32f + 0.075f},
+                      .radius = 0.1f,
+                      .b = 0.075f,
+                      .a = {0.0f, -1.0f},
+                      .material_id = 5}},
+        .parabolas = {Parabola {.vertex = {0.86f, 0.66f},
+                                .axis = normalize(vec2 {-1.0f, -2.0f}),
+                                .focal = 0.01f,
+                                .clip = 0.1f,
+                                .material_id = 3}}};
+#elif 1
+    Scene scene {
+        .view_x = view_x,
+        .view_y = view_y,
+        .view_width = view_width,
+        .view_height = view_height,
+        .materials = {Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .type = Material_type::diffuse,
+                                .emissive_color = {1.0f, 1.0f, 1.0f},
+                                .emissive_strength = 6.0f,
+                                .ior = 1.0f},
+                      Material {.base_color = {0.75f, 0.55f, 0.25f},
+                                .type = Material_type::dielectric,
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .ior = 1.5f},
+                      Material {.base_color = {0.25f, 0.75f, 0.75f},
+                                .type = Material_type::dielectric,
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .ior = 1.5f},
+                      Material {.base_color = {0.75f, 0.25f, 0.75f},
+                                .type = Material_type::specular,
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .ior = 1.0f},
+                      Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                .type = Material_type::diffuse,
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .ior = 1.0f},
+                      Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                .type = Material_type::dielectric,
+                                .emissive_color = {},
+                                .emissive_strength = 0.0f,
+                                .ior = 1.5f}},
+        .circles = {},
+        .lines = {Line {{0.35f, 0.05f}, {0.1f, 0.2f}, 3},
+                  Line {{0.1f, 0.4f}, {0.4f, 0.6f}, 4}},
+        .arcs = {Arc {.center = {0.8f, 0.5f},
+                      .radius = 0.03f,
+                      .b = 0.0f,
+                      .a = {},
+                      .material_id = 0},
+                 Arc {.center = {0.5f, 0.3f},
+                      .radius = 0.15f,
+                      .b = 0.0f,
+                      .a = {},
+                      .material_id = 1},
+                 Arc {.center = {0.8f, 0.2f},
+                      .radius = 0.05f,
+                      .b = 0.0f,
+                      .a = {},
+                      .material_id = 2},
+                 Arc {.center = {0.6f, 0.6f},
+                      .radius = 0.1f,
+                      .b = -0.04f,
+                      .a = {-0.5f, std::numbers::sqrt3_v<float> * 0.5f},
+                      .material_id = 3},
+                 Arc {.center = {0.25f, 0.32f - 0.075f},
+                      .radius = 0.1f,
+                      .b = 0.075f,
+                      .a = {0.0f, 1.0f},
+                      .material_id = 5},
+                 Arc {.center = {0.25f, 0.32f + 0.075f},
+                      .radius = 0.1f,
+                      .b = 0.075f,
+                      .a = {0.0f, -1.0f},
+                      .material_id = 5}},
+        .parabolas = {Parabola {.vertex = {0.86f, 0.66f},
+                                .axis = normalize(vec2 {-1.0f, -2.0f}),
+                                .focal = 0.01f,
+                                .clip = 0.1f,
+                                .material_id = 3}}};
 #elif 1
     constexpr vec2 light_center {0.8f, 0.5f};
     constexpr float light_radius {0.003f};
@@ -113,48 +199,57 @@ Scene create_scene(int texture_width, int texture_height)
     const auto cover_radius =
         std::sqrt(lens_dist * lens_dist + lens_half_width * lens_half_width);
 
-    Scene scene {
-        .view_x = view_x,
-        .view_y = view_y,
-        .view_width = view_width,
-        .view_height = view_height,
-        .materials = {Material {.base_color = {1.0f, 1.0f, 1.0f},
-                                .emissive_color = {1.0f, 1.0f, 1.0f},
-                                .emissive_strength = 20.0f,
-                                .type = Material_type::diffuse,
-                                .ior = 1.0f},
-                      Material {.base_color = {0.0f, 0.0f, 0.0f},
-                                .emissive_color = {},
-                                .emissive_strength = 0.0f,
-                                .type = Material_type::diffuse,
-                                .ior = 1.0f},
-                      Material {.base_color = {1.0f, 1.0f, 1.0f},
-                                .emissive_color = {},
-                                .emissive_strength = 0.0f,
-                                .type = Material_type::dielectric,
-                                .ior = 1.5f},
-                      Material {.base_color = {1.0f, 0.75f, 0.5f},
-                                .emissive_color = {},
-                                .emissive_strength = 0.0f,
-                                .type = Material_type::dielectric,
-                                .ior = 1.7f}},
-        .circles = {Circle {light_center, light_radius, 0}},
-        .lines = {Line {{5.0f, 0.3f}, {-4.0f, 0.3f}, 3},
-                  Line {{5.0f, 0.25f}, {-4.0f, 0.25f}, 3},
-                  Line {{-4.0f, 0.2f}, {5.0f, 0.2f}, 3},
-                  Line {{-4.0f, 0.15f}, {5.0f, 0.15f}, 3}},
-        .arcs = {Arc {light_center, cover_radius, -lens_dir, -lens_dist, 1},
-                 Arc {lens_center - lens_offset * lens_dir,
-                      lens_radius,
-                      lens_dir,
-                      lens_radius - lens_half_thickness,
-                      2},
-                 Arc {lens_center + lens_offset * lens_dir,
-                      lens_radius,
-                      -lens_dir,
-                      lens_radius - lens_half_thickness,
-                      2}}};
-#elif 1
+    Scene scene {.view_x = view_x,
+                 .view_y = view_y,
+                 .view_width = view_width,
+                 .view_height = view_height,
+                 .materials = {Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                         .type = Material_type::diffuse,
+                                         .emissive_color = {1.0f, 1.0f, 1.0f},
+                                         .emissive_strength = 20.0f,
+                                         .ior = 1.0f},
+                               Material {.base_color = {0.0f, 0.0f, 0.0f},
+                                         .type = Material_type::diffuse,
+                                         .emissive_color = {},
+                                         .emissive_strength = 0.0f,
+                                         .ior = 1.0f},
+                               Material {.base_color = {1.0f, 1.0f, 1.0f},
+                                         .type = Material_type::dielectric,
+                                         .emissive_color = {},
+                                         .emissive_strength = 0.0f,
+                                         .ior = 1.5f},
+                               Material {.base_color = {1.0f, 0.75f, 0.5f},
+                                         .type = Material_type::dielectric,
+                                         .emissive_color = {},
+                                         .emissive_strength = 0.0f,
+                                         .ior = 1.7f},
+                               Material {.base_color = {0.75f, 0.5f, 1.0f},
+                                         .type = Material_type::specular,
+                                         .emissive_color = {},
+                                         .emissive_strength = 0.0f,
+                                         .ior = 1.0f}},
+                 .circles = {Circle {light_center, light_radius, 0}},
+                 .lines = {Line {{5.0f, 0.3f}, {-4.0f, 0.3f}, 3},
+                           Line {{5.0f, 0.25f}, {-4.0f, 0.25f}, 3},
+                           Line {{-4.0f, 0.2f}, {5.0f, 0.2f}, 3},
+                           Line {{-4.0f, 0.15f}, {5.0f, 0.15f}, 3}},
+                 .arcs = {Arc {.center = light_center,
+                               .radius = cover_radius,
+                               .b = -lens_dist,
+                               .a = -lens_dir,
+                               .material_id = 1},
+                          Arc {.center = lens_center - lens_offset * lens_dir,
+                               .radius = lens_radius,
+                               .b = lens_radius - lens_half_thickness,
+                               .a = lens_dir,
+                               .material_id = 2},
+                          Arc {.center = lens_center + lens_offset * lens_dir,
+                               .radius = lens_radius,
+                               .b = lens_radius - lens_half_thickness,
+                               .a = -lens_dir,
+                               .material_id = 2}},
+                 .parabolas = {}};
+#elif 0
     Scene scene {
         .view_x = view_x,
         .view_y = view_y,
@@ -163,14 +258,14 @@ Scene create_scene(int texture_width, int texture_height)
         .materials =
             {
                 Material {.base_color = {0.75f, 0.75f, 0.75f},
+                          .type = Material_type::diffuse,
                           .emissive_color = {1.0f, 1.0f, 1.0f},
                           .emissive_strength = 6.0f,
-                          .type = Material_type::diffuse,
                           .ior = 1.0f},
                 Material {.base_color = {0.75f, 0.75f, 0.75f},
+                          .type = Material_type::diffuse,
                           .emissive_color = {},
                           .emissive_strength = 0.0f,
-                          .type = Material_type::diffuse,
                           .ior = 1.0f},
             },
         .circles = {Circle {{0.5f, 0.5f * view_height / view_width}, 0.05f, 0}},
@@ -186,26 +281,28 @@ Scene create_scene(int texture_width, int texture_height)
                   Line {{0.75f, 0.3f * view_height / view_width},
                         {0.7f, 0.5f * view_height / view_width},
                         1}},
-        .arcs = {}};
+        .arcs = {},
+        .parabolas = {}};
 #else
     Scene scene {.view_x = view_x,
                  .view_y = view_y,
                  .view_width = view_width,
                  .view_height = view_height,
                  .materials = {Material {.base_color = {0.75f, 0.75f, 0.75f},
+                                         .type = Material_type::dielectric,
                                          .emissive_color = {1.0f, 1.0f, 1.0f},
                                          .emissive_strength = 6.0f,
-                                         .type = Material_type::dielectric,
                                          .ior = 1.0f},
                                Material {.base_color = {0.25f, 0.75f, 0.75f},
+                                         .type = Material_type::specular,
                                          .emissive_color = {},
                                          .emissive_strength = 0.0f,
-                                         .type = Material_type::specular,
                                          .ior = 1.0f}},
                  .circles = {},
                  .lines = {Line {{0.2f, 0.3f}, {0.23f, 0.4f}, 0},
                            Line {{0.4f, 0.2f}, {0.7f, 0.4f}, 1}},
-                 .arcs = {}};
+                 .arcs = {},
+                 .parabolas = {}};
 #endif
 
     return scene;
@@ -213,6 +310,8 @@ Scene create_scene(int texture_width, int texture_height)
 
 std::expected<Scene, std::string> load_scene(const std::filesystem::path &path)
 {
+    return std::unexpected("Scene loading not fully implemented");
+
     std::error_code ec;
 
     if (!std::filesystem::exists(path, ec))
@@ -259,6 +358,8 @@ std::expected<Scene, std::string> load_scene(const std::filesystem::path &path)
 std::expected<void, std::string> save_scene(const Scene &scene,
                                             const std::filesystem::path &path)
 {
+    return std::unexpected("Scene saving not fully implemented");
+
     std::ofstream file(path);
     if (!file)
     {

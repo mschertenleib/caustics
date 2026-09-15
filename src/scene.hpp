@@ -11,40 +11,52 @@
 
 enum struct Material_type : std::int32_t
 {
-    diffuse,
-    specular,
-    dielectric
+    diffuse = 0,
+    specular = 1,
+    dielectric = 2
 };
+
+// NOTE: these structs have to mirror their definition in GLSL code, and have
+// the same std140 layout
 
 struct alignas(16) Material
 {
-    alignas(16) vec3 base_color;
-    alignas(16) vec3 emissive_color;
-    float emissive_strength;
+    vec3 base_color;
     Material_type type;
+    vec3 emissive_color;
+    float emissive_strength;
     float ior;
 };
 
 struct alignas(16) Circle
 {
-    alignas(8) vec2 center;
+    vec2 center;
     float radius;
     std::uint32_t material_id;
 };
 
 struct alignas(16) Line
 {
-    alignas(8) vec2 a;
-    alignas(8) vec2 b;
+    vec2 a;
+    vec2 b;
     std::uint32_t material_id;
 };
 
 struct alignas(16) Arc
 {
-    alignas(8) vec2 center;
+    vec2 center;
     float radius;
-    alignas(8) vec2 a;
     float b;
+    vec2 a;
+    std::uint32_t material_id;
+};
+
+struct alignas(16) Parabola
+{
+    vec2 vertex;
+    vec2 axis;
+    float focal;
+    float clip;
     std::uint32_t material_id;
 };
 
@@ -58,6 +70,7 @@ struct Scene
     std::vector<Circle> circles;
     std::vector<Line> lines;
     std::vector<Arc> arcs;
+    std::vector<Parabola> parabolas;
 };
 
 [[nodiscard]] Scene create_scene(int texture_width, int texture_height);

@@ -6,9 +6,9 @@ precision highp float;
 struct Material
 {
     vec3 base_color;
+    int type;
     vec3 emissive_color;
     float emissive_strength;
-    int type;
     float ior;
 };
 
@@ -30,8 +30,17 @@ struct Arc
 {
     vec2 center;
     float radius;
-    vec2 a;
     float b;
+    vec2 a;
+    uint material_id;
+};
+
+struct Parabola
+{
+    vec2 vertex;
+    vec2 axis;
+    float focal;
+    float clip;
     uint material_id;
 };
 
@@ -44,11 +53,11 @@ struct Hit
 
 
 
-// FIXME
-layout(std140) uniform Materials { Material materials[MATERIAL_COUNT > 0 ? MATERIAL_COUNT : 1]; };
-layout(std140) uniform Circles { Circle circles[CIRCLE_COUNT > 0 ? CIRCLE_COUNT : 1]; };
-layout(std140) uniform Lines { Line lines[LINE_COUNT > 0 ? LINE_COUNT : 1]; };
-layout(std140) uniform Arcs { Arc arcs[ARC_COUNT > 0 ? ARC_COUNT : 1]; };
+layout(std140) uniform Materials { Material materials[MAX_MATERIALS]; };
+layout(std140) uniform Circles { Circle circles[MAX_CIRCLES]; };
+layout(std140) uniform Lines { Line lines[MAX_LINES]; };
+layout(std140) uniform Arcs { Arc arcs[MAX_ARCS]; };
+layout(std140) uniform Parabolas { Parabola parabolas[MAX_PARABOLAS]; };
 
 uniform int sample_index;
 uniform int samples_per_frame;
@@ -60,18 +69,396 @@ out vec4 out_color;
 
 
 
-const float pi = 3.1415926535897931;
+#define PI 3.14159274
+#define FLOAT_EPSILON 1.1920929e-7
+#define FLOAT_MAX 3.40282347e38
 
-const int geometry_none = 0;
-const int geometry_circle = 1;
-const int geometry_line = 2;
-const int geometry_arc = 3;
+#define GEOMETRY_NONE 0
+#define GEOMETRY_CIRCLE 1
+#define GEOMETRY_LINE 2
+#define GEOMETRY_ARC 3
+#define GEOMETRY_PARABOLA 4
 
-const int material_diffuse = 0;
-const int material_specular = 1;
-const int material_dielectric = 2;
+#define MATERIAL_DIFFUSE 0
+#define MATERIAL_SPECULAR 1
+#define MATERIAL_DIELECTRIC 2
 
 
+
+
+
+float cross2(vec2 a, vec2 b)
+{
+    return a.x * b.y - a.y * b.x;
+}
+
+bool intersect_circle(vec2 origin, vec2 direction, Circle circle, inout float t, inout vec2 local)
+{
+    float radius = abs(circle.radius);
+    float radius_sq = radius * radius;
+
+    vec2 m = origin - circle.center;
+
+    // Signed perpendicular distance from the center to the ray
+    float perp = cross2(direction, m);
+
+    // Half chord squared
+    float h_sq = fma(-perp, perp, radius_sq);
+
+    // Allow a small negative error at tangency
+    float h_sq_scale = max(radius_sq, perp * perp);
+    float h_sq_eps = 4.0 * FLOAT_EPSILON * h_sq_scale;
+    if (h_sq < -h_sq_eps)
+    {
+        return false;
+    }
+
+    float h = sqrt(max(h_sq, 0.0));
+    float b = dot(m, direction);
+    float c = dot(m, m) - radius_sq;
+    float q = -(b + (b >= 0.0 ? h : -h));
+    if (q == 0.0) // q == 0 implies t = 0
+    {
+        return false;
+    }
+
+    float t0 = q;
+    float t1 = c / q;
+
+    // t0 must be the nearest root
+    if (t1 < t0)
+    {
+        float tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+    }
+
+    // Orthonormal basis vector perpendicular to the ray
+    vec2 side = vec2(-direction.y, direction.x);
+
+    if (t0 > 0.0 && t0 < t)
+    {
+        t = t0;
+        local = perp * side - h * direction;
+        return true;
+    }
+
+    if (t1 > 0.0 && t1 < t)
+    {
+        t = t1;
+        local = perp * side + h * direction;
+        return true;
+    }
+
+    return false;
+}
+
+bool intersect_line(vec2 origin, vec2 direction, Line line, inout float t, inout vec2 local)
+{
+    vec2 s = line.b - line.a;
+    vec2 q = line.a - origin;
+    float s_sq = dot(s, s);
+    float denom = cross2(direction, s);
+    float denom_eps = 4.0 * FLOAT_EPSILON * sqrt(s_sq);
+    if (abs(denom) <= denom_eps)
+    {
+        return false;
+    }
+
+    float tr = cross2(q, s) / denom;
+    float u  = cross2(q, direction) / denom;
+    if (tr <= 0.0 || tr >= t || u < 0.0 || u > 1.0)
+    {
+        return false;
+    }
+
+    t = tr;
+    local = vec2(u, 0.0);
+    return true;
+}
+
+bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout vec2 local)
+{
+    float radius = abs(arc.radius);
+    float radius_sq = radius * radius;
+
+    vec2 m = origin - arc.center;
+
+    // Signed perpendicular distance from the center to the ray
+    float perp = cross2(direction, m);
+
+    // Half chord squared
+    float h_sq = fma(-perp, perp, radius_sq);
+
+    // Allow a small negative error at tangency
+    float h_sq_scale = max(radius_sq, perp * perp);
+    float h_sq_eps = 4.0 * FLOAT_EPSILON * h_sq_scale;
+    if (h_sq < -h_sq_eps)
+    {
+        return false;
+    }
+
+    float h = sqrt(max(h_sq, 0.0));
+    float b = dot(m, direction);
+    float c = dot(m, m) - radius_sq;
+    float q = -(b + (b >= 0.0 ? h : -h));
+    if (q == 0.0) // q == 0 implies t = 0
+    {
+        return false;
+    }
+
+    float t0 = q;
+    float t1 = c / q;
+
+    // t0 must be the nearest root
+    if (t1 < t0)
+    {
+        float tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+    }
+
+    // Orthonormal basis vector perpendicular to the ray
+    vec2 side = vec2(-direction.y, direction.x);
+
+    if (t0 > 0.0 && t0 < t)
+    {
+        vec2 rel = perp * side - h * direction;
+        if (dot(arc.a, rel) >= arc.b)
+        {
+            t = t0;
+            local = rel;
+            return true;
+        }
+    }
+
+    if (t1 > 0.0 && t1 < t)
+    {
+        vec2 rel = perp * side + h * direction;
+        if (dot(arc.a, rel) >= arc.b)
+        {
+            t = t1;
+            local = rel;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout float t, inout vec2 local)
+{
+    vec2 axis = parabola.axis;
+    vec2 side = vec2(-axis.y, axis.x);
+
+    vec2 ro = origin - parabola.vertex;
+    float ox = dot(ro, axis);
+    float oy = dot(ro, side);
+    float dx = dot(direction, axis);
+    float dy = dot(direction, side);
+    float f = parabola.focal;
+    float a = dy * dy;
+    float b = fma(oy, dy, -2.0 * f * dx);
+    float c = fma(oy, oy, -4.0 * f * ox);
+
+    // Exactly parallel to the parabola axis -> linear equation
+    if (a == 0.0)
+    {
+        if (b == 0.0)
+        {
+            return false;
+        }
+
+        float tr = -c / (2.0 * b);
+        if (tr <= 0.0 || tr >= t)
+        {
+            return false;
+        }
+
+        float y = fma(tr, dy, oy);
+        float x = (y * y) / (4.0 * f);
+        if (x > parabola.clip)
+        {
+            return false;
+        }
+
+        t = tr;
+        local = vec2(x, y);
+        return true;
+    }
+
+    float dx_sq = dx * dx;
+    float dy_sq = dy * dy;
+    float dxdy = dx * dy;
+    float base = fma(f, dx_sq, fma(-oy, dxdy, ox * dy_sq));
+
+    float base_scale = abs(f * dx_sq) + abs(oy * dxdy) + abs(ox * dy_sq);
+    float base_eps = 4.0 * FLOAT_EPSILON * base_scale;
+    if (base < -base_eps)
+    {
+        return false;
+    }
+
+    float sqrt_disc = 2.0 * sqrt(f * max(base, 0.0));
+    float q = -(b + (b >= 0.0 ? sqrt_disc : -sqrt_disc));
+    if (q == 0.0) // q == 0 implies t = 0
+    {
+        return false;
+    }
+
+    float t0 = q / a;
+    float t1 = c / q;
+
+    // t0 must be the nearest root
+    if (t1 < t0)
+    {
+        float tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+    }
+
+    if (t0 > 0.0 && t0 < t)
+    {
+        float y = fma(t0, dy, oy);
+        float x = (y * y) / (4.0 * f);
+        if (x <= parabola.clip)
+        {
+            t = t0;
+            local = vec2(x, y);
+            return true;
+        }
+    }
+
+    if (t1 > 0.0 && t1 < t)
+    {
+        float y = fma(t1, dy, oy);
+        float x = (y * y) / (4.0 * f);
+        if (x <= parabola.clip)
+        {
+            t = t1;
+            local = vec2(x, y);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out int geometry_type, out int geometry_index)
+{
+    t = FLOAT_MAX;
+    local = vec2(0.0);
+    geometry_type = GEOMETRY_NONE;
+    geometry_index = -1;
+
+    for (int i = 0; i < NUM_CIRCLES; ++i)
+    {
+        if (intersect_circle(origin, direction, circles[i], t, local))
+        {
+            geometry_type = GEOMETRY_CIRCLE;
+            geometry_index = i;
+        }
+    }
+    for (int i = 0; i < NUM_LINES; ++i)
+    {
+        if (intersect_line(origin, direction, lines[i], t, local))
+        {
+            geometry_type = GEOMETRY_LINE;
+            geometry_index = i;
+        }
+    }
+    for (int i = 0; i < NUM_ARCS; ++i)
+    {
+        if (intersect_arc(origin, direction, arcs[i], t, local))
+        {
+            geometry_type = GEOMETRY_ARC;
+            geometry_index = i;
+        }
+    }
+    for (int i = 0; i < NUM_PARABOLAS; ++i)
+    {
+        if (intersect_parabola(origin, direction, parabolas[i], t, local))
+        {
+            geometry_type = GEOMETRY_PARABOLA;
+            geometry_index = i;
+        }
+    }
+
+    return geometry_type != GEOMETRY_NONE;
+}
+
+Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, int geometry_type, int geometry_index)
+{
+    Hit hit;
+
+    switch(geometry_type)
+    {
+        case GEOMETRY_CIRCLE:
+        {
+            Circle circle = circles[geometry_index];
+            vec2 geometric_normal = normalize(local);
+            hit.position = circle.center + abs(circle.radius) * geometric_normal;
+            // Negative radius means normal points towards the center
+            hit.normal = sign(circle.radius) * geometric_normal;
+            hit.material_id = circle.material_id;
+            break;
+        }
+        case GEOMETRY_LINE:
+        {
+            Line line = lines[geometry_index];
+            vec2 ab = line.b - line.a;
+            hit.position = line.a + local.x * ab;
+            vec2 line_dir = normalize(ab);
+            hit.normal = vec2(line_dir.y, -line_dir.x);
+            hit.material_id = line.material_id;
+            break;
+        }
+        case GEOMETRY_ARC:
+        {
+            Arc arc = arcs[geometry_index];
+            vec2 geometric_normal = normalize(local);
+            hit.position = arc.center + abs(arc.radius) * geometric_normal;
+            // Negative radius means normal points towards the center
+            hit.normal = sign(arc.radius) * geometric_normal;
+            hit.material_id = arc.material_id;
+            break;
+        }
+        case GEOMETRY_PARABOLA:
+        {
+            Parabola parabola = parabolas[geometry_index];
+            vec2 side = vec2(-parabola.axis.y, parabola.axis.x);
+            hit.position = local.x * parabola.axis + local.y * side + parabola.vertex;
+            hit.normal = normalize(-2.0 * parabola.focal * parabola.axis + local.y * side);
+            hit.material_id = parabola.material_id;
+            break;
+        }
+    }
+
+    return hit;
+}
+
+// This uses the technique by Carsten Wächter and
+// Nikolaus Binder from "A Fast and Robust Method for Avoiding
+// Self-Intersection" from Ray Tracing Gems (version 1.7, 2020).
+vec2 offset_position_along_normal(vec2 position, vec2 normal)
+{
+    // Convert the normal to an integer offset.
+    ivec2 of_i = ivec2(256.0 * normal);
+
+    // Offset each component of position using its binary representation.
+    // Handle the sign bits correctly.
+    vec2 p_i = vec2(
+        intBitsToFloat(floatBitsToInt(position.x) + ((position.x < 0.0) ? -of_i.x : of_i.x)),
+        intBitsToFloat(floatBitsToInt(position.y) + ((position.y < 0.0) ? -of_i.y : of_i.y))
+    );
+    // Use a floating-point offset instead for points near (0,0), the origin.
+    const float origin = 1.0 / 32.0;
+    const float float_scale = 1.0 / 65536.0;
+    return vec2(
+        abs(position.x) < origin ? position.x + float_scale * normal.x : p_i.x,
+        abs(position.y) < origin ? position.y + float_scale * normal.y : p_i.y
+    );
+}
 
 uint hash(uint x)
 {
@@ -92,194 +479,6 @@ float random(inout uint rng_state)
 
     const float inv_2_24 = 1.0 / 16777216.0;
     return float(rng_state >> 8u) * inv_2_24;
-}
-
-bool intersect_circle(vec2 origin, vec2 direction, vec2 center, float radius, inout float t)
-{
-    vec2 oc = center - origin;
-    float oc_dot_dir = dot(oc, direction);
-    float discriminant = oc_dot_dir * oc_dot_dir - dot(oc, oc) + radius * radius;
-    if (discriminant < 0.0)
-    {
-        return false;
-    }
-
-    float sqrt_discriminant = sqrt(discriminant);
-    float t1 = oc_dot_dir - sqrt_discriminant;
-    if (t1 > 0.0 && t1 < t)
-    {
-        t = t1;
-        return true;
-    }
-
-    float t2 = oc_dot_dir + sqrt_discriminant;
-    if (t2 > 0.0 && t2 < t)
-    {
-        t = t2;
-        return true;
-    }
-
-    return false;
-}
-
-bool intersect_line(vec2 origin, vec2 direction, vec2 a, vec2 b, inout float t, inout float u)
-{
-    vec2 ab = b - a;
-    float determinant = direction.x * ab.y - direction.y * ab.x;
-    if (abs(determinant) < 1e-6) // Parallel
-    {
-        return false;
-    }
-
-    mat2 mat_inv = 1.0 / determinant * mat2(-direction.y, -ab.y, direction.x, ab.x);
-    vec2 result = mat_inv * (origin - a);
-    float intersection_u = result.x;
-    float intersection_t = result.y;
-    if (intersection_t > 0.0 && intersection_t < t && intersection_u >= 0.0 && intersection_u <= 1.0)
-    {
-        t = intersection_t;
-        u = intersection_u;
-        return true;
-    }
-
-    return false;
-}
-
-bool intersect_arc(vec2 origin, vec2 direction, vec2 center, float radius, vec2 a, float b, inout float t)
-{
-    vec2 oc = center - origin;
-    float oc_dot_dir = dot(oc, direction);
-    float discriminant = oc_dot_dir * oc_dot_dir - dot(oc, oc) + radius * radius;
-    if (discriminant < 0.0)
-    {
-        return false;
-    }
-
-    float sqrt_discriminant = sqrt(discriminant);
-    float t1 = oc_dot_dir - sqrt_discriminant;
-    if (t1 > 0.0 && t1 < t)
-    {
-        vec2 rel_hit_pos = origin + t1 * direction - center;
-        if (dot(a, rel_hit_pos) >= b)
-        {
-            t = t1;
-            return true;
-        }
-    }
-    
-    float t2 = oc_dot_dir + sqrt_discriminant;
-    if (t2 > 0.0 && t2 < t)
-    {
-        vec2 rel_hit_pos = origin + t2 * direction - center;
-        if (dot(a, rel_hit_pos) >= b)
-        {
-            t = t2;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool intersect(vec2 origin, vec2 direction, out float t, out float u, out int geometry_type, out int geometry_index)
-{
-    t = 1e6;
-    u = 0.0;
-    geometry_type = geometry_none;
-    geometry_index = -1;
-
-    for (int i = 0; i < CIRCLE_COUNT; ++i)
-    {
-        if (intersect_circle(origin, direction, circles[i].center, circles[i].radius, t))
-        {
-            geometry_type = geometry_circle;
-            geometry_index = i;
-        }
-    }
-    for (int i = 0; i < LINE_COUNT; ++i)
-    {
-        if (intersect_line(origin, direction, lines[i].a, lines[i].b, t, u))
-        {
-            geometry_type = geometry_line;
-            geometry_index = i;
-        }
-    }
-    for (int i = 0; i < ARC_COUNT; ++i)
-    {
-        if (intersect_arc(origin, direction, arcs[i].center, arcs[i].radius, arcs[i].a, arcs[i].b, t))
-        {
-            geometry_type = geometry_arc;
-            geometry_index = i;
-        }
-    }
-
-    return geometry_type != geometry_none;
-}
-
-Hit get_hit(vec2 origin, vec2 direction, float t, float u, int geometry_type, int geometry_index)
-{
-    Hit hit;
-
-    switch(geometry_type)
-    {
-    case geometry_circle:
-    {
-        Circle circle = circles[geometry_index];
-        hit.position = origin + t * direction;
-        // A negative radius means the object normal (defining the
-        // "outside" of solid objects) points towards the center
-        hit.normal = sign(circle.radius) * normalize(hit.position - circle.center);
-        // Re-project the hit position onto the circle
-        hit.position = circle.center + hit.normal * circle.radius;
-        hit.material_id = circle.material_id;
-        break;
-    }
-    case geometry_line:
-    {
-        Line line = lines[geometry_index];
-        // FIXME: can use mix() ?
-        hit.position = line.a + u * (line.b - line.a);
-        vec2 line_dir = normalize(line.b - line.a);
-        hit.normal = vec2(line_dir.y, -line_dir.x);
-        hit.material_id = line.material_id;
-        break;
-    }
-    case geometry_arc:
-    {
-        Arc arc = arcs[geometry_index];
-        hit.position = origin + t * direction;
-        // A negative radius means the object normal (defining the
-        // "outside" of solid objects) points towards the center
-        hit.normal = sign(arc.radius) * normalize(hit.position - arc.center);
-        // Re-project the hit position onto the arc
-        hit.position = arc.center + hit.normal * arc.radius;
-        hit.material_id = arc.material_id;
-        break;
-    }
-    }
-
-    return hit;
-}
-
-// This uses the technique by Carsten Wächter and
-// Nikolaus Binder from "A Fast and Robust Method for Avoiding
-// Self-Intersection" from Ray Tracing Gems (version 1.7, 2020).
-vec2 offset_position_along_normal(vec2 position, vec2 normal)
-{
-    // Convert the normal to an integer offset.
-    ivec2 of_i = ivec2(256.0 * normal);
-
-    // Offset each component of position using its binary representation.
-    // Handle the sign bits correctly.
-    vec2 p_i = vec2(
-        intBitsToFloat(floatBitsToInt(position.x) + ((position.x < 0.0) ? -of_i.x : of_i.x)),
-        intBitsToFloat(floatBitsToInt(position.y) + ((position.y < 0.0) ? -of_i.y : of_i.y)));
-    // Use a floating-point offset instead for points near (0,0), the origin.
-    const float origin = 1.0 / 32.0;
-    const float float_scale = 1.0 / 65536.0;
-    return vec2(
-        abs(position.x) < origin ? position.x + float_scale * normal.x : p_i.x,
-        abs(position.y) < origin ? position.y + float_scale * normal.y : p_i.y);
 }
 
 vec2 sample_diffuse(vec2 normal, inout uint rng_state)
@@ -305,13 +504,13 @@ void evaluate_material(
     vec2 normal = is_entering ? hit.normal : -hit.normal;
     cos_theta_i = abs(cos_theta_i);
 
-    if (material.type == material_diffuse) 
+    if (material.type == MATERIAL_DIFFUSE) 
     {
         ray_origin = offset_position_along_normal(hit.position, normal);
         ray_direction = sample_diffuse(normal, rng_state);
         throughput *= material.base_color;
     } 
-    else if (material.type == material_specular) 
+    else if (material.type == MATERIAL_SPECULAR) 
     {
         ray_origin = offset_position_along_normal(hit.position, normal);
         ray_direction = reflect(ray_direction, normal);
@@ -321,7 +520,7 @@ void evaluate_material(
         vec3 fresnel_reflectance = f0 + (1.0 - f0) * (c * c * c * c * c);
         throughput *= fresnel_reflectance; 
     } 
-    else if (material.type == material_dielectric) 
+    else if (material.type == MATERIAL_DIELECTRIC) 
     {
         const float n_vacuum = 1.0;
         float n_A = is_entering ? n_vacuum : material.ior;
@@ -357,7 +556,7 @@ void evaluate_material(
     }
 }
 
-vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
+vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
 {
     vec3 radiance = vec3(0.0);
     vec3 throughput = vec3(1.0);
@@ -365,20 +564,23 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
     for (int depth = 0; depth <= 32; ++depth)
     {
         float t;
-        float u;
+        vec2 local;
         int geometry_type;
         int geometry_index;
-        bool is_hit = intersect(origin, direction, t, u, geometry_type, geometry_index);
+        bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
 
         if (!is_hit)
         {
-            //const vec3 environment_emission = vec3(0.2, 0.2, 0.2);
-            //radiance += throughput * environment_emission;
+            //const vec3 environment_emission = vec3(0.6, 0.6, 0.6);
+            //float gate = pow(max(dot(ray_direction, vec2(0.0, 1.0)), 0.0), 5.0);
+            //radiance += throughput * environment_emission * gate;
             break;
         }
 
-        Hit hit = get_hit(origin, direction, t, u, geometry_type, geometry_index);
+        Hit hit = get_hit(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
         Material material = materials[hit.material_id];
+
+        // TODO (general): rename Material -> Surface, and add Volume. Each primitive stores an index to a surface, and indices to two volumes (all three optional)
 
         // FIXME: we need to keep track of the IOR, not use vacuum.
 
@@ -387,7 +589,7 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
 // to allow scattering everywhere, even if this could technically be implied by some
 /// ill-formed, non-closed dielectric geometries).
 #if 0
-        if (material.type == material_dielectric && dot(direction, hit.normal) > 0.0)
+        if (material.type == MATERIAL_DIELECTRIC && dot(direction, hit.normal) > 0.0)
         {
             const float sigma_a = 0.0;
             const float sigma_s = 5.0;
@@ -395,9 +597,9 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
             float scatter_distance = -log(1.0 - random(rng_state)) / sigma_t;
             if (scatter_distance < t)
             {
-                origin += direction * scatter_distance;
+                ray_origin += ray_direction * scatter_distance;
                 throughput *= sigma_s / sigma_t;
-                float angle = 2.0 * pi * random(rng_state);
+                float angle = 2.0 * PI * random(rng_state);
                 direction = vec2(cos(angle), sin(angle));
                 continue;
             }
@@ -420,7 +622,7 @@ vec3 compute_radiance(vec2 origin, vec2 direction, inout uint rng_state)
             throughput /= survival_prob;
         }
 
-        evaluate_material(hit, material, origin, direction, throughput, rng_state);
+        evaluate_material(hit, material, ray_origin, ray_direction, throughput, rng_state);
     }
 
     return radiance;
@@ -437,7 +639,7 @@ void main()
     {
         vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
         vec2 ray_origin = view_position + (uv - 0.5) * view_size;
-        float angle = 2.0 * pi * random(rng_state);
+        float angle = 2.0 * PI * random(rng_state);
         vec2 ray_direction = vec2(cos(angle), sin(angle));
         vec3 radiance = compute_radiance(ray_origin, ray_direction, rng_state);
         accumulated_color += vec4(radiance, 1.0);

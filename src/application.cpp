@@ -21,6 +21,7 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cmath>
 #include <concepts>
@@ -44,6 +45,16 @@
 
 namespace
 {
+
+constexpr std::size_t max_ubo_size {16'384};
+constexpr std::size_t max_materials {
+    std::bit_floor(max_ubo_size / sizeof(Material))};
+constexpr std::size_t max_circles {
+    std::bit_floor(max_ubo_size / sizeof(Circle))};
+constexpr std::size_t max_lines {std::bit_floor(max_ubo_size / sizeof(Line))};
+constexpr std::size_t max_arcs {std::bit_floor(max_ubo_size / sizeof(Arc))};
+constexpr std::size_t max_parabolas {
+    std::bit_floor(max_ubo_size / sizeof(Parabola))};
 
 #define ENUMERATE_GL_FUNCTIONS_COMMON(f)                                       \
     f(PFNGLENABLEPROC, glEnable);                                              \
@@ -247,6 +258,7 @@ struct Application
     Unique_handle<GLuint, GL_array_deleter> circles_ubo {};
     Unique_handle<GLuint, GL_array_deleter> lines_ubo {};
     Unique_handle<GLuint, GL_array_deleter> arcs_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> parabolas_ubo {};
     float thickness {}; // In fraction of the view height
     Raster_geometry raster_geometry {};
     Unique_handle<GLuint, GL_array_deleter> vao {};
@@ -261,7 +273,7 @@ struct Application
     GLint loc_view_size_draw_line {};
     GLint loc_view_position_draw_arc {};
     GLint loc_view_size_draw_arc {};
-    unsigned int max_samples {200'000};
+    unsigned int max_samples {500'000};
     unsigned int sample_index {};
     unsigned int samples_per_frame {};
     double last_time {};
@@ -489,15 +501,27 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
     const auto fragment_shader_code = read_file("shaders/trace.glsl");
     const auto header = std::format("{}\n"
-                                    "#define MATERIAL_COUNT {}\n"
-                                    "#define CIRCLE_COUNT {}\n"
-                                    "#define LINE_COUNT {}\n"
-                                    "#define ARC_COUNT {}\n",
+                                    "#define MAX_MATERIALS {}\n"
+                                    "#define MAX_CIRCLES {}\n"
+                                    "#define MAX_LINES {}\n"
+                                    "#define MAX_ARCS {}\n"
+                                    "#define MAX_PARABOLAS {}\n"
+                                    "#define NUM_MATERIALS {}\n"
+                                    "#define NUM_CIRCLES {}\n"
+                                    "#define NUM_LINES {}\n"
+                                    "#define NUM_ARCS {}\n"
+                                    "#define NUM_PARABOLAS {}\n",
                                     glsl_version,
+                                    max_materials,
+                                    max_circles,
+                                    max_lines,
+                                    max_arcs,
+                                    max_parabolas,
                                     scene.materials.size(),
                                     scene.circles.size(),
                                     scene.lines.size(),
-                                    scene.arcs.size());
+                                    scene.arcs.size(),
+                                    scene.parabolas.size());
     const char *const fragment_shader_sources[] {header.c_str(),
                                                  fragment_shader_code.c_str()};
     const auto fragment_shader =
@@ -628,7 +652,8 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return fbo;
 }
 
-[[nodiscard]] auto create_vertex_index_buffers(const Raster_geometry &geometry)
+[[nodiscard]] auto
+create_vertex_and_index_buffers(const Raster_geometry &geometry)
 {
     auto vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
     glBindVertexArray(vao.get());
@@ -692,15 +717,33 @@ void update_vertex_buffer(GLuint vao,
     glBindVertexArray(0);
 }
 
-template <typename T>
-[[nodiscard]] auto create_uniform_buffer(const std::vector<T> &data)
+[[nodiscard]] auto create_uniform_buffer(std::size_t size)
 {
-    constexpr std::size_t max_ubo_size {16'384};
+    if (size > max_ubo_size)
+    {
+        throw std::runtime_error(std::format(
+            "Uniform buffer too big ({}B > {}B)", size, max_ubo_size));
+    }
 
     auto ubo = create_gl_object(glGenBuffers, glDeleteBuffers);
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo.get());
+    glBufferData(GL_UNIFORM_BUFFER,
+                 static_cast<GLsizeiptr>(size),
+                 nullptr,
+                 GL_STATIC_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
+    return ubo;
+}
+
+template <typename T>
+void upload_uniform_buffer(GLuint ubo, const std::vector<T> &data)
+{
+    // FIXME: we should compare against the UBO's allocated capacity, not the
+    // max. Or actually compare the number of elements, but we can't do it from
+    // inside here. Should we just avoid T and make this function accept a
+    // std::span<const std::byte> ?
     const auto data_size = data.size() * sizeof(T);
     if (data_size > max_ubo_size)
     {
@@ -708,12 +751,12 @@ template <typename T>
             "Uniform buffer too big ({}B > {}B)", data_size, max_ubo_size));
     }
 
-    glBufferData(GL_UNIFORM_BUFFER,
-                 static_cast<GLsizeiptr>(data_size),
-                 data.data(),
-                 GL_STATIC_DRAW);
-
-    return ubo;
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferSubData(GL_UNIFORM_BUFFER,
+                    0,
+                    static_cast<GLsizeiptr>(data.size() * sizeof(T)),
+                    data.data());
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
 #ifdef __EMSCRIPTEN__
@@ -1078,10 +1121,17 @@ void Application::init()
     query_end = create_gl_object(glGenQueries, glDeleteQueries);
 #endif
 
-    materials_ubo = create_uniform_buffer(scene.materials);
-    circles_ubo = create_uniform_buffer(scene.circles);
-    lines_ubo = create_uniform_buffer(scene.lines);
-    arcs_ubo = create_uniform_buffer(scene.arcs);
+    materials_ubo = create_uniform_buffer(max_materials * sizeof(Material));
+    circles_ubo = create_uniform_buffer(max_circles * sizeof(Circle));
+    lines_ubo = create_uniform_buffer(max_lines * sizeof(Line));
+    arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
+    parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
+
+    upload_uniform_buffer(materials_ubo.get(), scene.materials);
+    upload_uniform_buffer(circles_ubo.get(), scene.circles);
+    upload_uniform_buffer(lines_ubo.get(), scene.lines);
+    upload_uniform_buffer(arcs_ubo.get(), scene.arcs);
+    upload_uniform_buffer(parabolas_ubo.get(), scene.parabolas);
 
     const auto bind_ubo = [program = trace_program.get()](
                               GLuint ubo, const char *name, GLuint binding)
@@ -1094,6 +1144,7 @@ void Application::init()
     bind_ubo(circles_ubo.get(), "Circles", 2);
     bind_ubo(lines_ubo.get(), "Lines", 3);
     bind_ubo(arcs_ubo.get(), "Arcs", 4);
+    bind_ubo(parabolas_ubo.get(), "Parabolas", 5);
 
     thickness = 0.0075f;
     create_raster_geometry(scene, thickness, raster_geometry);
@@ -1102,7 +1153,7 @@ void Application::init()
     // clarify the distinction between updating the vertex buffer (when
     // zooming or moving objects) and re-creating the vertex and index buffers
     // with a new size (when adding or removing objects).
-    std::tie(vao, vbo, ibo) = create_vertex_index_buffers(raster_geometry);
+    std::tie(vao, vbo, ibo) = create_vertex_and_index_buffers(raster_geometry);
 
     circle_program = create_program(
         glsl_version, "shaders/shader.vert", "shaders/circle.frag");
@@ -1132,17 +1183,32 @@ void make_scene_ui(Scene &scene,
                    bool &materials_changed,
                    bool &circles_changed,
                    bool &lines_changed,
-                   bool &arcs_changed)
+                   bool &arcs_changed,
+                   bool &parabolas_changed)
 {
     // FIXME
-    auto edit_vec2 = [](const char *label, vec2 &v)
+
+    constexpr auto edit_vec2 = [](const char *label, vec2 &v)
     { return ImGui::DragFloat2(label, &v.x, 0.01f); };
 
-    // FIXME
-    auto edit_color = [](const char *label, vec3 &v)
+    constexpr auto edit_unit_vec2 = [](const char *label, vec2 &v)
+    {
+        auto old_v = v;
+        if (ImGui::DragFloat2(label, &v.x, 0.01f, -1.0f, 1.0f))
+        {
+            if (v.x != old_v.x)
+                v.y = std::copysign(std::sqrt(1.0f - v.x * v.x), v.y);
+            else
+                v.x = std::copysign(std::sqrt(1.0f - v.y * v.y), v.x);
+            return true;
+        }
+        return false;
+    };
+
+    constexpr auto edit_color = [](const char *label, vec3 &v)
     { return ImGui::ColorEdit3(label, &v.x); };
 
-    auto edit_material_id = [](const char *label, std::uint32_t &id)
+    constexpr auto edit_material_id = [](const char *label, std::uint32_t &id)
     { return ImGui::InputScalar(label, ImGuiDataType_U32, &id); };
 
     if (ImGui::TreeNode("Materials"))
@@ -1256,6 +1322,35 @@ void make_scene_ui(Scene &scene,
                     arcs_changed = true;
                 if (edit_material_id("material_id", a.material_id))
                     arcs_changed = true;
+
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Parabolas"))
+    {
+        for (std::size_t i = 0; i < scene.parabolas.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            auto &p = scene.parabolas[i];
+
+            if (ImGui::TreeNode("Parabola"))
+            {
+                if (edit_vec2("vertex", p.vertex))
+                    parabolas_changed = true;
+                if (edit_unit_vec2("axis", p.axis))
+                    parabolas_changed = true;
+                if (ImGui::DragFloat("focal", &p.focal, 0.01f, 0.0f, 1000.0f))
+                    parabolas_changed = true;
+                if (ImGui::DragFloat("clip", &p.clip, 0.01f, 0.0f, 1000.0f))
+                    parabolas_changed = true;
+                if (edit_material_id("material_id", p.material_id))
+                    parabolas_changed = true;
 
                 ImGui::TreePop();
             }
@@ -1418,6 +1513,7 @@ void Application::main_loop_update()
     bool circles_changed {};
     bool lines_changed {};
     bool arcs_changed {};
+    bool parabolas_changed {};
 
     if (ImGui::Begin("UI"))
     {
@@ -1459,7 +1555,7 @@ void Application::main_loop_update()
         ImGui::InputFloat("X", &scene.view_x, 0.0f, 0.0f, "%.5g");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputFloat("Y", &scene.view_x, 0.0f, 0.0f, "%.5g");
+        ImGui::InputFloat("Y", &scene.view_y, 0.0f, 0.0f, "%.5g");
 
         ImGui::SetNextItemWidth(100.0f);
         ImGui::InputFloat("Width", &scene.view_width, 0.0f, 0.0f, "%.5g");
@@ -1480,13 +1576,15 @@ void Application::main_loop_update()
                       materials_changed,
                       circles_changed,
                       lines_changed,
-                      arcs_changed);
+                      arcs_changed,
+                      parabolas_changed);
     }
     ImGui::End();
 
     ImGui::Render();
 
-    if (materials_changed || circles_changed || lines_changed || arcs_changed)
+    if (materials_changed || circles_changed || lines_changed || arcs_changed ||
+        parabolas_changed)
     {
         sample_index = 0;
     }
@@ -1506,24 +1604,16 @@ void Application::main_loop_update()
 
     if (do_render)
     {
-        const auto update_ubo =
-            []<typename T>(GLuint ubo, const std::vector<T> &data)
-        {
-            glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-            glBufferSubData(GL_UNIFORM_BUFFER,
-                            0,
-                            static_cast<GLsizeiptr>(data.size() * sizeof(T)),
-                            data.data());
-            // glBindBuffer(GL_UNIFORM_BUFFER, 0);
-        };
         if (materials_changed)
-            update_ubo(materials_ubo.get(), scene.materials);
+            upload_uniform_buffer(materials_ubo.get(), scene.materials);
         if (circles_changed)
-            update_ubo(circles_ubo.get(), scene.circles);
+            upload_uniform_buffer(circles_ubo.get(), scene.circles);
         if (lines_changed)
-            update_ubo(lines_ubo.get(), scene.lines);
+            upload_uniform_buffer(lines_ubo.get(), scene.lines);
         if (arcs_changed)
-            update_ubo(arcs_ubo.get(), scene.arcs);
+            upload_uniform_buffer(arcs_ubo.get(), scene.arcs);
+        if (parabolas_changed)
+            upload_uniform_buffer(parabolas_ubo.get(), scene.parabolas);
 
         const auto samples_this_frame =
             std::min(samples_per_frame, max_samples - sample_index);
@@ -1631,8 +1721,12 @@ void Application::main_loop_update()
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    // FIXME: shouldn't this be removed when using Emscripten?
+    // FIXME: This changes CPU frame time measurement behaviour, since with
+    // Emscripten vsync is done outside the main loop function. We should align
+    // our native version to this behaviour.
+#ifndef __EMSCRIPTEN__
     glfwSwapBuffers(window.get());
+#endif
 
     ++num_frames;
     const double current_time {glfwGetTime()};
