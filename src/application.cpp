@@ -47,10 +47,10 @@ namespace
 {
 
 constexpr std::size_t max_ubo_size {16'384};
-constexpr std::size_t max_materials {
-    std::bit_floor(max_ubo_size / sizeof(Material))};
-constexpr std::size_t max_circles {
-    std::bit_floor(max_ubo_size / sizeof(Circle))};
+constexpr std::size_t max_surfaces {
+    std::bit_floor(max_ubo_size / sizeof(Surface))};
+constexpr std::size_t max_volumes {
+    std::bit_floor(max_ubo_size / sizeof(Volume))};
 constexpr std::size_t max_lines {std::bit_floor(max_ubo_size / sizeof(Line))};
 constexpr std::size_t max_arcs {std::bit_floor(max_ubo_size / sizeof(Arc))};
 constexpr std::size_t max_parabolas {
@@ -254,8 +254,8 @@ struct Application
     Unique_handle<GLuint, GL_array_deleter> query_start {};
     Unique_handle<GLuint, GL_array_deleter> query_end {};
 #endif
-    Unique_handle<GLuint, GL_array_deleter> materials_ubo {};
-    Unique_handle<GLuint, GL_array_deleter> circles_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> surfaces_ubo {};
+    Unique_handle<GLuint, GL_array_deleter> volumes_ubo {};
     Unique_handle<GLuint, GL_array_deleter> lines_ubo {};
     Unique_handle<GLuint, GL_array_deleter> arcs_ubo {};
     Unique_handle<GLuint, GL_array_deleter> parabolas_ubo {};
@@ -501,24 +501,24 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 
     const auto fragment_shader_code = read_file("shaders/trace.glsl");
     const auto header = std::format("{}\n"
-                                    "#define MAX_MATERIALS {}\n"
-                                    "#define MAX_CIRCLES {}\n"
-                                    "#define MAX_LINES {}\n"
-                                    "#define MAX_ARCS {}\n"
-                                    "#define MAX_PARABOLAS {}\n"
-                                    "#define NUM_MATERIALS {}\n"
-                                    "#define NUM_CIRCLES {}\n"
-                                    "#define NUM_LINES {}\n"
-                                    "#define NUM_ARCS {}\n"
-                                    "#define NUM_PARABOLAS {}\n",
+                                    "#define MAX_SURFACES {}u\n"
+                                    "#define MAX_VOLUMES {}u\n"
+                                    "#define MAX_LINES {}u\n"
+                                    "#define MAX_ARCS {}u\n"
+                                    "#define MAX_PARABOLAS {}u\n"
+                                    "#define NUM_SURFACES {}u\n"
+                                    "#define NUM_VOLUMES {}u\n"
+                                    "#define NUM_LINES {}u\n"
+                                    "#define NUM_ARCS {}u\n"
+                                    "#define NUM_PARABOLAS {}u\n",
                                     glsl_version,
-                                    max_materials,
-                                    max_circles,
+                                    max_surfaces,
+                                    max_volumes,
                                     max_lines,
                                     max_arcs,
                                     max_parabolas,
-                                    scene.materials.size(),
-                                    scene.circles.size(),
+                                    scene.surfaces.size(),
+                                    scene.volumes.size(),
                                     scene.lines.size(),
                                     scene.arcs.size(),
                                     scene.parabolas.size());
@@ -851,53 +851,22 @@ void create_raster_geometry(const Scene &scene,
 
     thickness *= scene.view_height;
 
-    geometry.circle_indices_offset = geometry.indices.size();
-    for (const auto &circle : scene.circles)
-    {
-        const auto half_side = circle.radius + 0.5f * thickness;
-        const auto bottom_left = circle.center + vec2 {-half_side, -half_side};
-        const auto bottom_right = circle.center + vec2 {half_side, -half_side};
-        const auto top_right = circle.center + vec2 {half_side, half_side};
-        const auto top_left = circle.center + vec2 {-half_side, half_side};
-        const auto rel_thickness = thickness / half_side;
-
-        const auto color = scene.materials[circle.material_id].base_color;
-        const auto first_index =
-            static_cast<std::uint32_t>(geometry.vertices.size());
-        geometry.vertices.push_back(
-            {bottom_left, {-1.0, -1.0f, rel_thickness, 0.0f}, color});
-        geometry.vertices.push_back(
-            {bottom_right, {1.0f, -1.0f, rel_thickness, 0.0f}, color});
-        geometry.vertices.push_back(
-            {top_right, {1.0f, 1.0f, rel_thickness, 0.0f}, color});
-        geometry.vertices.push_back(
-            {top_left, {-1.0f, 1.0f, rel_thickness, 0.0f}, color});
-        geometry.indices.push_back(first_index + 0);
-        geometry.indices.push_back(first_index + 1);
-        geometry.indices.push_back(first_index + 2);
-        geometry.indices.push_back(first_index + 0);
-        geometry.indices.push_back(first_index + 2);
-        geometry.indices.push_back(first_index + 3);
-    }
-    geometry.circle_indices_size =
-        geometry.indices.size() - geometry.circle_indices_offset;
-
     geometry.line_indices_offset = geometry.indices.size();
     for (const auto &line : scene.lines)
     {
-        const auto line_vec = line.b - line.a;
+        const auto line_vec = line.vertex_b - line.vertex_a;
         const auto line_length = norm(line_vec);
         const auto line_dir = line_vec * (1.0f / line_length);
         const auto delta_left =
             vec2 {-line_dir.y, line_dir.x} * (thickness * 0.5f);
         const auto delta_up = line_dir * (thickness * 0.5f);
-        const auto start_left = line.a + delta_left - delta_up;
-        const auto start_right = line.a - delta_left - delta_up;
-        const auto end_left = line.b + delta_left + delta_up;
-        const auto end_right = line.b - delta_left + delta_up;
+        const auto start_left = line.vertex_a + delta_left - delta_up;
+        const auto start_right = line.vertex_a - delta_left - delta_up;
+        const auto end_left = line.vertex_b + delta_left + delta_up;
+        const auto end_right = line.vertex_b - delta_left + delta_up;
         const auto aspect_ratio = line_length / thickness;
 
-        const auto color = scene.materials[line.material_id].base_color;
+        const auto color = scene.surfaces[line.surface_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -922,8 +891,8 @@ void create_raster_geometry(const Scene &scene,
     for (const auto &arc : scene.arcs)
     {
         const auto half_side = arc.radius + 0.5f * thickness;
-        const auto bottom_y = arc.b - 0.5f * thickness;
-        const auto dir = arc.a;
+        const auto bottom_y = arc.clip_offset - 0.5f * thickness;
+        const auto dir = arc.clip_normal;
         const auto left = vec2 {-dir.y, dir.x};
         const auto bottom_left = arc.center + dir * bottom_y + left * half_side;
         const auto bottom_right =
@@ -931,10 +900,10 @@ void create_raster_geometry(const Scene &scene,
         const auto top_right = arc.center + (dir - left) * half_side;
         const auto top_left = arc.center + (dir + left) * half_side;
         const auto rel_thickness = thickness / half_side;
-        const auto cutoff = arc.b / half_side;
+        const auto cutoff = arc.clip_offset / half_side;
         const auto bottom_coord = bottom_y / half_side;
 
-        const auto color = scene.materials[arc.material_id].base_color;
+        const auto color = scene.surfaces[arc.surface_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -1121,14 +1090,14 @@ void Application::init()
     query_end = create_gl_object(glGenQueries, glDeleteQueries);
 #endif
 
-    materials_ubo = create_uniform_buffer(max_materials * sizeof(Material));
-    circles_ubo = create_uniform_buffer(max_circles * sizeof(Circle));
+    surfaces_ubo = create_uniform_buffer(max_surfaces * sizeof(Surface));
+    volumes_ubo = create_uniform_buffer(max_volumes * sizeof(Volume));
     lines_ubo = create_uniform_buffer(max_lines * sizeof(Line));
     arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
     parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
 
-    upload_uniform_buffer(materials_ubo.get(), scene.materials);
-    upload_uniform_buffer(circles_ubo.get(), scene.circles);
+    upload_uniform_buffer(surfaces_ubo.get(), scene.surfaces);
+    upload_uniform_buffer(volumes_ubo.get(), scene.volumes);
     upload_uniform_buffer(lines_ubo.get(), scene.lines);
     upload_uniform_buffer(arcs_ubo.get(), scene.arcs);
     upload_uniform_buffer(parabolas_ubo.get(), scene.parabolas);
@@ -1140,8 +1109,8 @@ void Application::init()
         glUniformBlockBinding(program, block_index, binding);
         glBindBufferBase(GL_UNIFORM_BUFFER, binding, ubo);
     };
-    bind_ubo(materials_ubo.get(), "Materials", 1);
-    bind_ubo(circles_ubo.get(), "Circles", 2);
+    bind_ubo(surfaces_ubo.get(), "Surfaces", 1);
+    bind_ubo(volumes_ubo.get(), "Volumes", 2);
     bind_ubo(lines_ubo.get(), "Lines", 3);
     bind_ubo(arcs_ubo.get(), "Arcs", 4);
     bind_ubo(parabolas_ubo.get(), "Parabolas", 5);
@@ -1180,8 +1149,8 @@ void Application::init()
 }
 
 void make_scene_ui(Scene &scene,
-                   bool &materials_changed,
-                   bool &circles_changed,
+                   bool &surfaces_changed,
+                   bool &volumes_changed,
                    bool &lines_changed,
                    bool &arcs_changed,
                    bool &parabolas_changed)
@@ -1205,20 +1174,23 @@ void make_scene_ui(Scene &scene,
         return false;
     };
 
+    constexpr auto edit_vec3 = [](const char *label, vec3 &v)
+    { return ImGui::DragFloat3(label, &v.x, 0.01f); };
+
     constexpr auto edit_color = [](const char *label, vec3 &v)
     { return ImGui::ColorEdit3(label, &v.x); };
 
     constexpr auto edit_material_id = [](const char *label, std::uint32_t &id)
     { return ImGui::InputScalar(label, ImGuiDataType_U32, &id); };
 
-    if (ImGui::TreeNode("Materials"))
+    if (ImGui::TreeNode("Surfaces"))
     {
-        for (std::size_t i = 0; i < scene.materials.size(); ++i)
+        for (std::size_t i = 0; i < scene.surfaces.size(); ++i)
         {
             ImGui::PushID(static_cast<int>(i));
-            Material &m = scene.materials[i];
+            Surface &m = scene.surfaces[i];
 
-            if (ImGui::TreeNode("Material"))
+            if (ImGui::TreeNode("Surface"))
             {
                 constexpr const char *items[] {
                     "Diffuse", "Specular", "Dielectric"};
@@ -1226,23 +1198,24 @@ void make_scene_ui(Scene &scene,
                 if (ImGui::Combo(
                         "Type", &current_item, items, std::size(items)))
                 {
-                    m.type = static_cast<Material_type>(current_item);
-                    materials_changed = true;
+                    m.type = static_cast<Surface_type>(current_item);
+                    surfaces_changed = true;
                 }
 
                 if (edit_color("Base color", m.base_color))
-                    materials_changed = true;
+                    surfaces_changed = true;
                 if (edit_color("Emissive color", m.emissive_color))
-                    materials_changed = true;
+                    surfaces_changed = true;
                 if (ImGui::DragFloat("Emissive strength",
                                      &m.emissive_strength,
                                      0.01f,
                                      0.0f,
                                      100.0f,
                                      "%.2f"))
-                    materials_changed = true;
-                if (ImGui::DragFloat("IOR", &m.ior, 0.01f, 1.0f, 3.0f, "%.2f"))
-                    materials_changed = true;
+                    surfaces_changed = true;
+                if (ImGui::DragFloat(
+                        "IOR", &m.ior_ratio, 0.01f, 1.0f, 3.0f, "%.2f"))
+                    surfaces_changed = true;
 
                 ImGui::TreePop();
             }
@@ -1253,21 +1226,26 @@ void make_scene_ui(Scene &scene,
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("Circles"))
+    if (ImGui::TreeNode("Volumes"))
     {
-        for (std::size_t i = 0; i < scene.circles.size(); ++i)
+        for (std::size_t i = 0; i < scene.volumes.size(); ++i)
         {
             ImGui::PushID(static_cast<int>(i));
-            Circle &c = scene.circles[i];
+            auto &v = scene.volumes[i];
 
-            if (ImGui::TreeNode("Circle"))
+            if (ImGui::TreeNode("Volume"))
             {
-                if (edit_vec2("center", c.center))
-                    circles_changed = true;
-                if (ImGui::DragFloat("radius", &c.radius, 0.01f, 0.0f, 1000.0f))
-                    circles_changed = true;
-                if (edit_material_id("material_id", c.material_id))
-                    circles_changed = true;
+                if (edit_vec3("absorption", v.absorption))
+                    volumes_changed = true;
+                if (ImGui::DragFloat(
+                        "scattering", &v.scattering, 0.01f, 0.0f, 1000.0f))
+                    volumes_changed = true;
+                if (ImGui::DragFloat("phase_anisotropy",
+                                     &v.phase_anisotropy,
+                                     0.01f,
+                                     -1.0f,
+                                     1.0f))
+                    volumes_changed = true;
 
                 ImGui::TreePop();
             }
@@ -1287,11 +1265,15 @@ void make_scene_ui(Scene &scene,
 
             if (ImGui::TreeNode("Line"))
             {
-                if (edit_vec2("a", l.a))
+                if (edit_vec2("a", l.vertex_a))
                     lines_changed = true;
-                if (edit_vec2("b", l.b))
+                if (edit_vec2("b", l.vertex_b))
                     lines_changed = true;
-                if (edit_material_id("material_id", l.material_id))
+                if (edit_material_id("surface_id", l.surface_id))
+                    lines_changed = true;
+                if (edit_material_id("volume_in_id", l.volume_in_id))
+                    lines_changed = true;
+                if (edit_material_id("volume_out_id", l.volume_out_id))
                     lines_changed = true;
 
                 ImGui::TreePop();
@@ -1308,7 +1290,7 @@ void make_scene_ui(Scene &scene,
         for (std::size_t i = 0; i < scene.arcs.size(); ++i)
         {
             ImGui::PushID(static_cast<int>(i));
-            Arc &a = scene.arcs[i];
+            auto &a = scene.arcs[i];
 
             if (ImGui::TreeNode("Arc"))
             {
@@ -1316,11 +1298,15 @@ void make_scene_ui(Scene &scene,
                     arcs_changed = true;
                 if (ImGui::DragFloat("radius", &a.radius, 0.01f, 0.0f, 1000.0f))
                     arcs_changed = true;
-                if (edit_vec2("a", a.a))
+                if (edit_vec2("a", a.clip_normal))
                     arcs_changed = true;
-                if (ImGui::DragFloat("b", &a.b, 0.01f))
+                if (ImGui::DragFloat("b", &a.clip_offset, 0.01f))
                     arcs_changed = true;
-                if (edit_material_id("material_id", a.material_id))
+                if (edit_material_id("surface_id", a.surface_id))
+                    arcs_changed = true;
+                if (edit_material_id("volume_in_id", a.volume_in_id))
+                    arcs_changed = true;
+                if (edit_material_id("volume_out_id", a.volume_out_id))
                     arcs_changed = true;
 
                 ImGui::TreePop();
@@ -1349,7 +1335,11 @@ void make_scene_ui(Scene &scene,
                     parabolas_changed = true;
                 if (ImGui::DragFloat("clip", &p.clip, 0.01f, 0.0f, 1000.0f))
                     parabolas_changed = true;
-                if (edit_material_id("material_id", p.material_id))
+                if (edit_material_id("surface_id", p.surface_id))
+                    parabolas_changed = true;
+                if (edit_material_id("volume_in_id", p.volume_in_id))
+                    parabolas_changed = true;
+                if (edit_material_id("volume_out_id", p.volume_out_id))
                     parabolas_changed = true;
 
                 ImGui::TreePop();
@@ -1509,8 +1499,8 @@ void Application::main_loop_update()
     ImGui::NewFrame();
 
     bool do_post_process {false};
-    bool materials_changed {};
-    bool circles_changed {};
+    bool surfaces_changed {};
+    bool volumes_changed {};
     bool lines_changed {};
     bool arcs_changed {};
     bool parabolas_changed {};
@@ -1573,8 +1563,8 @@ void Application::main_loop_update()
         ImGui::SeparatorText("Scene");
 
         make_scene_ui(scene,
-                      materials_changed,
-                      circles_changed,
+                      surfaces_changed,
+                      volumes_changed,
                       lines_changed,
                       arcs_changed,
                       parabolas_changed);
@@ -1583,7 +1573,7 @@ void Application::main_loop_update()
 
     ImGui::Render();
 
-    if (materials_changed || circles_changed || lines_changed || arcs_changed ||
+    if (surfaces_changed || volumes_changed || lines_changed || arcs_changed ||
         parabolas_changed)
     {
         sample_index = 0;
@@ -1604,10 +1594,10 @@ void Application::main_loop_update()
 
     if (do_render)
     {
-        if (materials_changed)
-            upload_uniform_buffer(materials_ubo.get(), scene.materials);
-        if (circles_changed)
-            upload_uniform_buffer(circles_ubo.get(), scene.circles);
+        if (surfaces_changed)
+            upload_uniform_buffer(surfaces_ubo.get(), scene.surfaces);
+        if (volumes_changed)
+            upload_uniform_buffer(volumes_ubo.get(), scene.volumes);
         if (lines_changed)
             upload_uniform_buffer(lines_ubo.get(), scene.lines);
         if (arcs_changed)

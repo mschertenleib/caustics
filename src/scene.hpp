@@ -6,10 +6,14 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
-enum struct Material_type : std::int32_t
+inline constexpr std::uint32_t invalid_id {
+    std::numeric_limits<std::uint32_t>::max()};
+
+enum struct Surface_type : std::uint32_t
 {
     diffuse = 0,
     specular = 1,
@@ -19,36 +23,40 @@ enum struct Material_type : std::int32_t
 // NOTE: these structs have to mirror their definition in GLSL code, and have
 // the same std140 layout
 
-struct alignas(16) Material
+struct alignas(16) Surface
 {
     vec3 base_color;
-    Material_type type;
+    Surface_type type;
     vec3 emissive_color;
     float emissive_strength;
-    float ior;
+    float ior_ratio;
 };
 
-struct alignas(16) Circle
+struct alignas(16) Volume
 {
-    vec2 center;
-    float radius;
-    std::uint32_t material_id;
+    vec3 absorption;
+    float scattering;
+    float phase_anisotropy;
 };
 
 struct alignas(16) Line
 {
-    vec2 a;
-    vec2 b;
-    std::uint32_t material_id;
+    vec2 vertex_a;
+    vec2 vertex_b;
+    std::uint32_t surface_id;
+    std::uint32_t volume_in_id;
+    std::uint32_t volume_out_id;
 };
 
 struct alignas(16) Arc
 {
     vec2 center;
     float radius;
-    float b;
-    vec2 a;
-    std::uint32_t material_id;
+    float clip_offset;
+    vec2 clip_normal;
+    std::uint32_t surface_id;
+    std::uint32_t volume_in_id;
+    std::uint32_t volume_out_id;
 };
 
 struct alignas(16) Parabola
@@ -57,7 +65,9 @@ struct alignas(16) Parabola
     vec2 axis;
     float focal;
     float clip;
-    std::uint32_t material_id;
+    std::uint32_t surface_id;
+    std::uint32_t volume_in_id;
+    std::uint32_t volume_out_id;
 };
 
 struct Scene
@@ -66,8 +76,8 @@ struct Scene
     float view_y;
     float view_width;
     float view_height;
-    std::vector<Material> materials;
-    std::vector<Circle> circles;
+    std::vector<Surface> surfaces;
+    std::vector<Volume> volumes;
     std::vector<Line> lines;
     std::vector<Arc> arcs;
     std::vector<Parabola> parabolas;

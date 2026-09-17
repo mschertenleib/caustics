@@ -3,36 +3,40 @@ precision highp float;
 
 
 
-struct Material
+struct Surface
 {
     vec3 base_color;
-    int type;
-    vec3 emissive_color;
-    float emissive_strength;
-    float ior;
+    uint type;
+    vec3 emission_color;
+    float emission_strength;
+    float ior_ratio;
 };
 
-struct Circle
+struct Volume
 {
-    vec2 center;
-    float radius;
-    uint material_id;
+    vec3 absorption;
+    float scattering;
+    float phase_anisotropy;
 };
 
 struct Line
 {
-    vec2 a;
-    vec2 b;
-    uint material_id;
+    vec2 vertex_a;
+    vec2 vertex_b;
+    uint surface_id;
+    uint volume_in_id;
+    uint volume_out_id;
 };
 
 struct Arc
 {
     vec2 center;
     float radius;
-    float b;
-    vec2 a;
-    uint material_id;
+    float clip_offset;
+    vec2 clip_normal;
+    uint surface_id;
+    uint volume_in_id;
+    uint volume_out_id;
 };
 
 struct Parabola
@@ -41,20 +45,24 @@ struct Parabola
     vec2 axis;
     float focal;
     float clip;
-    uint material_id;
+    uint surface_id;
+    uint volume_in_id;
+    uint volume_out_id;
 };
 
 struct Hit
 {
     vec2 position;
     vec2 normal;
-    uint material_id;
+    uint surface_id;
+    uint volume_in_id;
+    uint volume_out_id;
 };
 
 
 
-layout(std140) uniform Materials { Material materials[MAX_MATERIALS]; };
-layout(std140) uniform Circles { Circle circles[MAX_CIRCLES]; };
+layout(std140) uniform Surfaces { Surface surfaces[MAX_SURFACES]; };
+layout(std140) uniform Volumes { Volume volumes[MAX_VOLUMES]; };
 layout(std140) uniform Lines { Line lines[MAX_LINES]; };
 layout(std140) uniform Arcs { Arc arcs[MAX_ARCS]; };
 layout(std140) uniform Parabolas { Parabola parabolas[MAX_PARABOLAS]; };
@@ -71,18 +79,18 @@ out vec4 out_color;
 
 #define PI 3.14159274
 #define FLOAT_EPSILON 1.1920929e-7
-#define FLOAT_MAX 3.40282347e38
+#define FLOAT_MAX 3.40282346e38 // Should be 3.40282347e38, but WebGL flags it as overflowing
 
-#define GEOMETRY_NONE 0
-#define GEOMETRY_CIRCLE 1
-#define GEOMETRY_LINE 2
-#define GEOMETRY_ARC 3
-#define GEOMETRY_PARABOLA 4
+#define GEOMETRY_NONE 0u
+#define GEOMETRY_LINE 1u
+#define GEOMETRY_ARC 2u
+#define GEOMETRY_PARABOLA 3u
 
-#define MATERIAL_DIFFUSE 0
-#define MATERIAL_SPECULAR 1
-#define MATERIAL_DIELECTRIC 2
+#define SURFACE_DIFFUSE 0u
+#define SURFACE_SPECULAR 1u
+#define SURFACE_DIELECTRIC 2u
 
+#define INVALID_ID 0xFFFFFFFFu
 
 
 
@@ -92,73 +100,13 @@ float cross2(vec2 a, vec2 b)
     return a.x * b.y - a.y * b.x;
 }
 
-bool intersect_circle(vec2 origin, vec2 direction, Circle circle, inout float t, inout vec2 local)
-{
-    float radius = abs(circle.radius);
-    float radius_sq = radius * radius;
-
-    vec2 m = origin - circle.center;
-
-    // Signed perpendicular distance from the center to the ray
-    float perp = cross2(direction, m);
-
-    // Half chord squared
-    float h_sq = fma(-perp, perp, radius_sq);
-
-    // Allow a small negative error at tangency
-    float h_sq_scale = max(radius_sq, perp * perp);
-    float h_sq_eps = 4.0 * FLOAT_EPSILON * h_sq_scale;
-    if (h_sq < -h_sq_eps)
-    {
-        return false;
-    }
-
-    float h = sqrt(max(h_sq, 0.0));
-    float b = dot(m, direction);
-    float c = dot(m, m) - radius_sq;
-    float q = -(b + (b >= 0.0 ? h : -h));
-    if (q == 0.0) // q == 0 implies t = 0
-    {
-        return false;
-    }
-
-    float t0 = q;
-    float t1 = c / q;
-
-    // t0 must be the nearest root
-    if (t1 < t0)
-    {
-        float tmp = t0;
-        t0 = t1;
-        t1 = tmp;
-    }
-
-    // Orthonormal basis vector perpendicular to the ray
-    vec2 side = vec2(-direction.y, direction.x);
-
-    if (t0 > 0.0 && t0 < t)
-    {
-        t = t0;
-        local = perp * side - h * direction;
-        return true;
-    }
-
-    if (t1 > 0.0 && t1 < t)
-    {
-        t = t1;
-        local = perp * side + h * direction;
-        return true;
-    }
-
-    return false;
-}
-
 bool intersect_line(vec2 origin, vec2 direction, Line line, inout float t, inout vec2 local)
 {
-    vec2 s = line.b - line.a;
-    vec2 q = line.a - origin;
+    vec2 s = line.vertex_b - line.vertex_a;
+    vec2 q = line.vertex_a - origin;
     float s_sq = dot(s, s);
     float denom = cross2(direction, s);
+    // FIXME: we might want to change this? At least we want to be consistent
     float denom_eps = 4.0 * FLOAT_EPSILON * sqrt(s_sq);
     if (abs(denom) <= denom_eps)
     {
@@ -188,9 +136,10 @@ bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout ve
     float perp = cross2(direction, m);
 
     // Half chord squared
-    float h_sq = fma(-perp, perp, radius_sq);
+    float h_sq = radius_sq - perp * perp;
 
     // Allow a small negative error at tangency
+    // FIXME: we might want to change this? At least we want to be consistent
     float h_sq_scale = max(radius_sq, perp * perp);
     float h_sq_eps = 4.0 * FLOAT_EPSILON * h_sq_scale;
     if (h_sq < -h_sq_eps)
@@ -224,7 +173,7 @@ bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout ve
     if (t0 > 0.0 && t0 < t)
     {
         vec2 rel = perp * side - h * direction;
-        if (dot(arc.a, rel) >= arc.b)
+        if (dot(arc.clip_normal, rel) >= arc.clip_offset)
         {
             t = t0;
             local = rel;
@@ -235,7 +184,7 @@ bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout ve
     if (t1 > 0.0 && t1 < t)
     {
         vec2 rel = perp * side + h * direction;
-        if (dot(arc.a, rel) >= arc.b)
+        if (dot(arc.clip_normal, rel) >= arc.clip_offset)
         {
             t = t1;
             local = rel;
@@ -258,8 +207,8 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     float dy = dot(direction, side);
     float f = parabola.focal;
     float a = dy * dy;
-    float b = fma(oy, dy, -2.0 * f * dx);
-    float c = fma(oy, oy, -4.0 * f * ox);
+    float b = oy * dy - 2.0 * f * dx;
+    float c = oy * oy - 4.0 * f * ox;
 
     // Exactly parallel to the parabola axis -> linear equation
     if (a == 0.0)
@@ -275,7 +224,7 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
             return false;
         }
 
-        float y = fma(tr, dy, oy);
+        float y = tr * dy + oy;
         float x = (y * y) / (4.0 * f);
         if (x > parabola.clip)
         {
@@ -290,8 +239,9 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     float dx_sq = dx * dx;
     float dy_sq = dy * dy;
     float dxdy = dx * dy;
-    float base = fma(f, dx_sq, fma(-oy, dxdy, ox * dy_sq));
+    float base = f * dx_sq - oy * dxdy + ox * dy_sq;
 
+    // FIXME: we might want to change this? At least we want to be consistent
     float base_scale = abs(f * dx_sq) + abs(oy * dxdy) + abs(ox * dy_sq);
     float base_eps = 4.0 * FLOAT_EPSILON * base_scale;
     if (base < -base_eps)
@@ -319,7 +269,7 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
 
     if (t0 > 0.0 && t0 < t)
     {
-        float y = fma(t0, dy, oy);
+        float y = t0 * dy + oy;
         float x = (y * y) / (4.0 * f);
         if (x <= parabola.clip)
         {
@@ -331,7 +281,7 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
 
     if (t1 > 0.0 && t1 < t)
     {
-        float y = fma(t1, dy, oy);
+        float y = t1 * dy + oy;
         float x = (y * y) / (4.0 * f);
         if (x <= parabola.clip)
         {
@@ -344,22 +294,14 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     return false;
 }
 
-bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out int geometry_type, out int geometry_index)
+bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uint geometry_type, out uint geometry_index)
 {
     t = FLOAT_MAX;
     local = vec2(0.0);
     geometry_type = GEOMETRY_NONE;
-    geometry_index = -1;
+    geometry_index = INVALID_ID;
 
-    for (int i = 0; i < NUM_CIRCLES; ++i)
-    {
-        if (intersect_circle(origin, direction, circles[i], t, local))
-        {
-            geometry_type = GEOMETRY_CIRCLE;
-            geometry_index = i;
-        }
-    }
-    for (int i = 0; i < NUM_LINES; ++i)
+    for (uint i = 0u; i < NUM_LINES; ++i)
     {
         if (intersect_line(origin, direction, lines[i], t, local))
         {
@@ -367,7 +309,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out int
             geometry_index = i;
         }
     }
-    for (int i = 0; i < NUM_ARCS; ++i)
+    for (uint i = 0u; i < NUM_ARCS; ++i)
     {
         if (intersect_arc(origin, direction, arcs[i], t, local))
         {
@@ -375,7 +317,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out int
             geometry_index = i;
         }
     }
-    for (int i = 0; i < NUM_PARABOLAS; ++i)
+    for (uint i = 0u; i < NUM_PARABOLAS; ++i)
     {
         if (intersect_parabola(origin, direction, parabolas[i], t, local))
         {
@@ -387,30 +329,22 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out int
     return geometry_type != GEOMETRY_NONE;
 }
 
-Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, int geometry_type, int geometry_index)
+Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, uint geometry_type, uint geometry_index)
 {
     Hit hit;
 
     switch(geometry_type)
     {
-        case GEOMETRY_CIRCLE:
-        {
-            Circle circle = circles[geometry_index];
-            vec2 geometric_normal = normalize(local);
-            hit.position = circle.center + abs(circle.radius) * geometric_normal;
-            // Negative radius means normal points towards the center
-            hit.normal = sign(circle.radius) * geometric_normal;
-            hit.material_id = circle.material_id;
-            break;
-        }
         case GEOMETRY_LINE:
         {
             Line line = lines[geometry_index];
-            vec2 ab = line.b - line.a;
-            hit.position = line.a + local.x * ab;
+            vec2 ab = line.vertex_b - line.vertex_a;
+            hit.position = line.vertex_a + local.x * ab;
             vec2 line_dir = normalize(ab);
             hit.normal = vec2(line_dir.y, -line_dir.x);
-            hit.material_id = line.material_id;
+            hit.surface_id = line.surface_id;
+            hit.volume_in_id = line.volume_in_id;
+            hit.volume_out_id = line.volume_out_id;
             break;
         }
         case GEOMETRY_ARC:
@@ -420,7 +354,9 @@ Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, int geometry_type,
             hit.position = arc.center + abs(arc.radius) * geometric_normal;
             // Negative radius means normal points towards the center
             hit.normal = sign(arc.radius) * geometric_normal;
-            hit.material_id = arc.material_id;
+            hit.surface_id = arc.surface_id;
+            hit.volume_in_id = arc.volume_in_id;
+            hit.volume_out_id = arc.volume_out_id;
             break;
         }
         case GEOMETRY_PARABOLA:
@@ -429,7 +365,9 @@ Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, int geometry_type,
             vec2 side = vec2(-parabola.axis.y, parabola.axis.x);
             hit.position = local.x * parabola.axis + local.y * side + parabola.vertex;
             hit.normal = normalize(-2.0 * parabola.focal * parabola.axis + local.y * side);
-            hit.material_id = parabola.material_id;
+            hit.surface_id = parabola.surface_id;
+            hit.volume_in_id = parabola.volume_in_id;
+            hit.volume_out_id = parabola.volume_out_id;
             break;
         }
     }
@@ -489,9 +427,9 @@ vec2 sample_diffuse(vec2 normal, inout uint rng_state)
     return cos_theta * normal + sin_theta * tangent;
 }
 
-void evaluate_material(
+void evaluate_surface(
     Hit hit,
-    Material material,
+    Surface surface,
     inout vec2 ray_origin,
     inout vec2 ray_direction,
     inout vec3 throughput,
@@ -504,29 +442,26 @@ void evaluate_material(
     vec2 normal = is_entering ? hit.normal : -hit.normal;
     cos_theta_i = abs(cos_theta_i);
 
-    if (material.type == MATERIAL_DIFFUSE) 
+    if (surface.type == SURFACE_DIFFUSE) 
     {
         ray_origin = offset_position_along_normal(hit.position, normal);
         ray_direction = sample_diffuse(normal, rng_state);
-        throughput *= material.base_color;
+        throughput *= surface.base_color;
     } 
-    else if (material.type == MATERIAL_SPECULAR) 
+    else if (surface.type == SURFACE_SPECULAR) 
     {
         ray_origin = offset_position_along_normal(hit.position, normal);
         ray_direction = reflect(ray_direction, normal);
         
-        vec3 f0 = material.base_color;
+        vec3 f0 = surface.base_color;
         float c = max(1.0 - cos_theta_i, 0.0);
         vec3 fresnel_reflectance = f0 + (1.0 - f0) * (c * c * c * c * c);
         throughput *= fresnel_reflectance; 
     } 
-    else if (material.type == MATERIAL_DIELECTRIC) 
+    else if (surface.type == SURFACE_DIELECTRIC) 
     {
-        const float n_vacuum = 1.0;
-        float n_A = is_entering ? n_vacuum : material.ior;
-        float n_B = is_entering ? material.ior : n_vacuum;
-        float relative_ior = n_A / n_B;
-        float sin2_theta_t = (relative_ior * relative_ior) * (1.0 - cos_theta_i * cos_theta_i);
+        float eta = is_entering ? 1.0 / surface.ior_ratio : surface.ior_ratio;
+        float sin2_theta_t = (eta * eta) * (1.0 - cos_theta_i * cos_theta_i);
 
         if (sin2_theta_t > 1.0) // Total internal reflection
         {
@@ -536,7 +471,7 @@ void evaluate_material(
         }
 
         float cos_theta_t = sqrt(1.0 - sin2_theta_t);
-        float r0 = (n_A - n_B) / (n_A + n_B);
+        float r0 = (eta - 1.0) / (eta + 1.0);
         float f0 = r0 * r0;
         float cos_fresnel = is_entering ? cos_theta_i : cos_theta_t;
         float c = max(1.0 - cos_fresnel, 0.0);
@@ -550,8 +485,8 @@ void evaluate_material(
         else
         {
             ray_origin = offset_position_along_normal(hit.position, -normal);
-            ray_direction = relative_ior * ray_direction + (relative_ior * cos_theta_i - cos_theta_t) * normal;
-            throughput *= material.base_color * relative_ior;
+            ray_direction = eta * ray_direction + (eta * cos_theta_i - cos_theta_t) * normal;
+            throughput *= surface.base_color * eta;
         }
     }
 }
@@ -565,8 +500,8 @@ vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
     {
         float t;
         vec2 local;
-        int geometry_type;
-        int geometry_index;
+        uint geometry_type;
+        uint geometry_index;
         bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
 
         if (!is_hit)
@@ -578,36 +513,54 @@ vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
         }
 
         Hit hit = get_hit(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
-        Material material = materials[hit.material_id];
 
-        // TODO (general): rename Material -> Surface, and add Volume. Each primitive stores an index to a surface, and indices to two volumes (all three optional)
-
-        // FIXME: we need to keep track of the IOR, not use vacuum.
+        
 
 // FIXME
 // ALso should go before !is_hit check? Maybe unnecessary since we probably don't want
 // to allow scattering everywhere, even if this could technically be implied by some
-/// ill-formed, non-closed dielectric geometries).
-#if 0
-        if (material.type == MATERIAL_DIELECTRIC && dot(direction, hit.normal) > 0.0)
+/// ill-formed, non-closed geometries.
+#if 1
+        bool is_entering = dot(ray_direction, hit.normal) < 0.0;
+        uint volume_id = is_entering ? hit.volume_out_id : hit.volume_in_id;
+        if (volume_id != INVALID_ID)
         {
-            const float sigma_a = 0.0;
-            const float sigma_s = 5.0;
-            const float sigma_t = sigma_a + sigma_s;
-            float scatter_distance = -log(1.0 - random(rng_state)) / sigma_t;
-            if (scatter_distance < t)
+            Volume volume = volumes[volume_id];
+            vec3 sigma_a = volume.absorption;
+            float sigma_s = volume.scattering;
+            float g = volume.phase_anisotropy;
+
+            vec3 sigma_t = sigma_a + vec3(sigma_s);
+            float sigma_maj = max(sigma_t.x, max(sigma_t.y, sigma_t.z));
+            if (sigma_maj > 0.0)
             {
-                ray_origin += ray_direction * scatter_distance;
-                throughput *= sigma_s / sigma_t;
-                float angle = 2.0 * PI * random(rng_state);
-                direction = vec2(cos(angle), sin(angle));
-                continue;
+                float distance = -log(1.0 - random(rng_state)) / sigma_maj;
+                if (distance < t)
+                {
+                    ray_origin += ray_direction * distance;
+
+                    vec3 transmittance = exp(-sigma_t * distance);
+                    throughput *= transmittance * (sigma_s / sigma_maj) * exp(sigma_maj * distance);
+
+                    float phi = 2.0 * PI * random(rng_state) - PI;
+                    float theta = 2.0 * atan((1.0 - g) / (1.0 + g) * tan(0.5 * phi));
+                    vec2 forward = ray_direction;
+                    vec2 right   = vec2(-forward.y, forward.x);
+                    ray_direction = cos(theta) * forward + sin(theta) * right;
+
+                    continue;
+                }
             }
-            throughput *= exp(-sigma_t * t);
+
+            throughput *= exp(-sigma_t * t) * exp(sigma_maj * t);
         }
 #endif
 
-        radiance += throughput * material.emissive_color * material.emissive_strength;
+        // FIXME: there might not be a surface
+        if (hit.surface_id == INVALID_ID) return vec3(1000.0, 0.0, 0.0);
+        Surface surface = surfaces[hit.surface_id];
+
+        radiance += throughput * surface.emission_color * surface.emission_strength;
 
         // Russian Roulette ray termination
         if (depth >= 3)
@@ -622,7 +575,7 @@ vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
             throughput /= survival_prob;
         }
 
-        evaluate_material(hit, material, ray_origin, ray_direction, throughput, rng_state);
+        evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, rng_state);
     }
 
     return radiance;
