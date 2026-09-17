@@ -47,10 +47,12 @@ vec3 PBR_neutral_tone_map(vec3 color)
 
 vec3 tone_map(vec3 color)
 {
-#if 0
+#if 1
+    return ACES_tone_map(color);
+#elif 0
     return PBR_neutral_tone_map(color);
 #else
-    return ACES_tone_map(color);
+    return clamp(color, 0.0, 1.0);
 #endif
 }
 

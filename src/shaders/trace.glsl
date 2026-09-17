@@ -67,6 +67,9 @@ layout(std140) uniform Lines { Line lines[MAX_LINES]; };
 layout(std140) uniform Arcs { Arc arcs[MAX_ARCS]; };
 layout(std140) uniform Parabolas { Parabola parabolas[MAX_PARABOLAS]; };
 
+uniform uint num_lines;
+uniform uint num_arcs;
+uniform uint num_parabolas;
 uniform int sample_index;
 uniform int samples_per_frame;
 uniform vec2 view_position;
@@ -127,9 +130,7 @@ bool intersect_line(vec2 origin, vec2 direction, Line line, inout float t, inout
 
 bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout vec2 local)
 {
-    float radius = abs(arc.radius);
-    float radius_sq = radius * radius;
-
+    float radius_sq = arc.radius * arc.radius;
     vec2 m = origin - arc.center;
 
     // Signed perpendicular distance from the center to the ray
@@ -301,7 +302,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uin
     geometry_type = GEOMETRY_NONE;
     geometry_index = INVALID_ID;
 
-    for (uint i = 0u; i < NUM_LINES; ++i)
+    for (uint i = 0u; i < num_lines; ++i)
     {
         if (intersect_line(origin, direction, lines[i], t, local))
         {
@@ -309,7 +310,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uin
             geometry_index = i;
         }
     }
-    for (uint i = 0u; i < NUM_ARCS; ++i)
+    for (uint i = 0u; i < num_arcs; ++i)
     {
         if (intersect_arc(origin, direction, arcs[i], t, local))
         {
@@ -317,7 +318,7 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uin
             geometry_index = i;
         }
     }
-    for (uint i = 0u; i < NUM_PARABOLAS; ++i)
+    for (uint i = 0u; i < num_parabolas; ++i)
     {
         if (intersect_parabola(origin, direction, parabolas[i], t, local))
         {

@@ -240,6 +240,9 @@ struct Application
     Unique_handle<GLuint, GL_array_deleter> target_texture {};
     Unique_handle<GLuint, GL_deleter> trace_program {};
     Unique_handle<GLuint, GL_array_deleter> empty_vao {};
+    GLint loc_num_lines {};
+    GLint loc_num_arcs {};
+    GLint loc_num_parabolas {};
     GLint loc_image_size {};
     GLint loc_sample_index {};
     GLint loc_samples_per_frame {};
@@ -505,23 +508,13 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                     "#define MAX_VOLUMES {}u\n"
                                     "#define MAX_LINES {}u\n"
                                     "#define MAX_ARCS {}u\n"
-                                    "#define MAX_PARABOLAS {}u\n"
-                                    "#define NUM_SURFACES {}u\n"
-                                    "#define NUM_VOLUMES {}u\n"
-                                    "#define NUM_LINES {}u\n"
-                                    "#define NUM_ARCS {}u\n"
-                                    "#define NUM_PARABOLAS {}u\n",
+                                    "#define MAX_PARABOLAS {}u\n",
                                     glsl_version,
                                     max_surfaces,
                                     max_volumes,
                                     max_lines,
                                     max_arcs,
-                                    max_parabolas,
-                                    scene.surfaces.size(),
-                                    scene.volumes.size(),
-                                    scene.lines.size(),
-                                    scene.arcs.size(),
-                                    scene.parabolas.size());
+                                    max_parabolas);
     const char *const fragment_shader_sources[] {header.c_str(),
                                                  fragment_shader_code.c_str()};
     const auto fragment_shader =
@@ -1060,6 +1053,10 @@ void Application::init()
 
     trace_program = create_trace_program(glsl_version, scene);
     empty_vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
+    loc_num_lines = glGetUniformLocation(trace_program.get(), "num_lines");
+    loc_num_arcs = glGetUniformLocation(trace_program.get(), "num_arcs");
+    loc_num_parabolas =
+        glGetUniformLocation(trace_program.get(), "num_parabolas");
     loc_image_size = glGetUniformLocation(trace_program.get(), "image_size");
     loc_sample_index =
         glGetUniformLocation(trace_program.get(), "sample_index");
@@ -1608,16 +1605,21 @@ void Application::main_loop_update()
         const auto samples_this_frame =
             std::min(samples_per_frame, max_samples - sample_index);
         glUseProgram(trace_program.get());
-        glUniform1i(loc_sample_index, static_cast<int>(sample_index));
+
+        glUniform1ui(loc_num_lines, static_cast<GLuint>(scene.lines.size()));
+        glUniform1ui(loc_num_arcs, static_cast<GLuint>(scene.arcs.size()));
+        glUniform1ui(loc_num_parabolas,
+                     static_cast<GLuint>(scene.parabolas.size()));
+        glUniform1i(loc_sample_index, static_cast<GLint>(sample_index));
         glUniform1i(loc_samples_per_frame,
-                    static_cast<int>(samples_this_frame));
+                    static_cast<GLint>(samples_this_frame));
         glUniform2f(loc_view_position, scene.view_x, scene.view_y);
         glUniform2f(loc_view_size, scene.view_width, scene.view_height);
 
         glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
         glUniform2ui(loc_image_size,
-                     static_cast<unsigned int>(texture_width),
-                     static_cast<unsigned int>(texture_height));
+                     static_cast<GLuint>(texture_width),
+                     static_cast<GLuint>(texture_height));
         glBindVertexArray(empty_vao.get());
 
         // new_average = alpha * sample_average + (1 - alpha) * old_average
