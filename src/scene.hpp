@@ -35,7 +35,8 @@ struct alignas(16) Surface
 struct alignas(16) Volume
 {
     vec3 absorption;
-    float scattering;
+    float _padding;
+    vec3 scattering;
     float phase_anisotropy;
 };
 

@@ -15,7 +15,7 @@ struct Surface
 struct Volume
 {
     vec3 absorption;
-    float scattering;
+    vec3 scattering;
     float phase_anisotropy;
 };
 
@@ -428,13 +428,7 @@ vec2 sample_diffuse(vec2 normal, inout uint rng_state)
     return cos_theta * normal + sin_theta * tangent;
 }
 
-void evaluate_surface(
-    Hit hit,
-    Surface surface,
-    inout vec2 ray_origin,
-    inout vec2 ray_direction,
-    inout vec3 throughput,
-    inout uint rng_state)
+void evaluate_surface(Hit hit, Surface surface, inout vec2 ray_origin, inout vec2 ray_direction, inout vec3 throughput, inout uint rng_state)
 {
     // hit.normal: object normal, defining "inside" and "outside"
     // normal:     opposes the incoming ray
@@ -492,6 +486,88 @@ void evaluate_surface(
     }
 }
 
+bool evaluate_volume(Volume volume, float t, inout vec2 ray_origin, inout vec2 ray_direction, inout vec3 throughput, inout uint rng_state)
+{
+    vec3 sigma_a = volume.absorption;
+    vec3 sigma_s = volume.scattering;
+    vec3 sigma_t = sigma_a + sigma_s;
+
+    if (max(sigma_t.x, max(sigma_t.y, sigma_t.z)) <= 0.0)
+    {
+        return false;
+    }
+
+    if (max(sigma_s.x, max(sigma_s.y, sigma_s.z)) <= 0.0)
+    {
+        throughput *= exp(-sigma_t * t);
+        return false;
+    }
+
+    float u_channel = random(rng_state);
+    float sigma_t_sample;
+    if (u_channel < 1.0 / 3.0)
+    {
+        sigma_t_sample = sigma_t.x;
+    }
+    else if (u_channel < 2.0 / 3.0)
+    {
+        sigma_t_sample = sigma_t.y;
+    }
+    else
+    {
+        sigma_t_sample = sigma_t.z;
+    }
+
+    float distance;
+    if (sigma_t_sample > 0.0)
+    {
+        distance = -log(1.0 - random(rng_state)) / sigma_t_sample;
+    }
+    else
+    {
+        distance = FLOAT_MAX;
+    }
+
+    vec3 Tr = exp(-sigma_t * min(distance, t));
+
+    if (distance < t)
+    {
+        ray_origin += ray_direction * distance;
+
+        float g = volume.phase_anisotropy;
+        if (g <= -1.0)
+        {
+            ray_direction = -ray_direction;
+        }
+        else if (g < 1.0)
+        {
+            float half_phi = PI * random(rng_state) - 0.5 * PI;
+            float sh = sin(half_phi);
+            float ch = cos(half_phi);
+            float a = (1.0 - g) / (1.0 + g);
+            float a_sq = a * a;
+            float ch_sq = ch * ch;
+            float sh_sq = sh * sh;
+            float denom = ch_sq + a_sq * sh_sq;
+            float cos_theta = (ch_sq - a_sq * sh_sq) / denom;
+            float sin_theta = (2.0 * a * sh * ch) / denom;
+            vec2 forward = ray_direction;
+            vec2 right = vec2(-forward.y, forward.x);
+            ray_direction = cos_theta * forward + sin_theta * right;
+        }
+
+        float q = (1.0 / 3.0) * dot(sigma_t, Tr);
+        throughput *= sigma_s * Tr / q;
+
+        return true;
+    }
+
+    float Q = (1.0 / 3.0) * (Tr.x + Tr.y + Tr.z);
+    throughput *= Tr / Q;
+
+    return false;
+}
+
 vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
 {
     vec3 radiance = vec3(0.0);
@@ -499,82 +575,57 @@ vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
 
     for (int depth = 0; depth <= 32; ++depth)
     {
+        // Russian Roulette termination
+        // NOTE: this is equivalent to doing it on the previous iteration
+        // just before any "continue" and at the end of the loop body.
+        if (depth >= 4)
+        {
+            float survival_prob = clamp(
+                max(throughput.r, max(throughput.g, throughput.b)),
+                0.05,
+                1.0);
+            if (random(rng_state) >= survival_prob)
+            {
+                break;
+            }
+            throughput /= survival_prob;
+        }
+
         float t;
         vec2 local;
         uint geometry_type;
         uint geometry_index;
         bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
-
         if (!is_hit)
         {
-            //const vec3 environment_emission = vec3(0.6, 0.6, 0.6);
-            //float gate = pow(max(dot(ray_direction, vec2(0.0, 1.0)), 0.0), 5.0);
-            //radiance += throughput * environment_emission * gate;
             break;
         }
 
         Hit hit = get_hit(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
 
-        
-
-// FIXME
-// ALso should go before !is_hit check? Maybe unnecessary since we probably don't want
-// to allow scattering everywhere, even if this could technically be implied by some
-/// ill-formed, non-closed geometries.
-#if 1
         bool is_entering = dot(ray_direction, hit.normal) < 0.0;
         uint volume_id = is_entering ? hit.volume_out_id : hit.volume_in_id;
         if (volume_id != INVALID_ID)
         {
             Volume volume = volumes[volume_id];
-            vec3 sigma_a = volume.absorption;
-            float sigma_s = volume.scattering;
-            float g = volume.phase_anisotropy;
-
-            vec3 sigma_t = sigma_a + vec3(sigma_s);
-            float sigma_maj = max(sigma_t.x, max(sigma_t.y, sigma_t.z));
-            if (sigma_maj > 0.0)
+            bool scatter = evaluate_volume(volume, t, ray_origin, ray_direction, throughput, rng_state);
+            if (scatter)
             {
-                float distance = -log(1.0 - random(rng_state)) / sigma_maj;
-                if (distance < t)
-                {
-                    ray_origin += ray_direction * distance;
-
-                    vec3 transmittance = exp(-sigma_t * distance);
-                    throughput *= transmittance * (sigma_s / sigma_maj) * exp(sigma_maj * distance);
-
-                    float phi = 2.0 * PI * random(rng_state) - PI;
-                    float theta = 2.0 * atan((1.0 - g) / (1.0 + g) * tan(0.5 * phi));
-                    vec2 forward = ray_direction;
-                    vec2 right   = vec2(-forward.y, forward.x);
-                    ray_direction = cos(theta) * forward + sin(theta) * right;
-
-                    continue;
-                }
+                continue;
             }
-
-            throughput *= exp(-sigma_t * t) * exp(sigma_maj * t);
         }
-#endif
 
-        // FIXME: there might not be a surface
-        if (hit.surface_id == INVALID_ID) return vec3(1000.0, 0.0, 0.0);
+        if (hit.surface_id == INVALID_ID)
+        {
+            // No surface interaction, continue tracing in the same direction
+            vec2 inside_normal = is_entering ? -hit.normal : hit.normal;
+            ray_origin = offset_position_along_normal(hit.position, inside_normal);
+            continue;
+        }
+
         Surface surface = surfaces[hit.surface_id];
 
         radiance += throughput * surface.emission_color * surface.emission_strength;
-
-        // Russian Roulette ray termination
-        if (depth >= 3)
-        {
-            float survival_prob = max(throughput.r, max(throughput.g, throughput.b));
-            survival_prob = max(survival_prob, 0.05);
-            if (random(rng_state) >= survival_prob)
-            {
-                break;
-            }
-
-            throughput /= survival_prob;
-        }
 
         evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, rng_state);
     }

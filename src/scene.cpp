@@ -92,7 +92,7 @@ Scene create_scene(int texture_width, int texture_height)
                               .emissive_strength = 0.0f,
                               .ior_ratio = 1.5f}},
         .volumes = {Volume {.absorption = {3.0f, 0.0f, 0.0f},
-                            .scattering = 20.0f,
+                            .scattering = {20.0f, 20.0f, 20.0f},
                             .phase_anisotropy = 0.7f}},
         .lines = {Line {.vertex_a = {0.35f, 0.05f},
                         .vertex_b = {0.1f, 0.2f},

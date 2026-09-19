@@ -1172,7 +1172,7 @@ void make_scene_ui(Scene &scene,
     };
 
     constexpr auto edit_vec3 = [](const char *label, vec3 &v)
-    { return ImGui::DragFloat3(label, &v.x, 0.01f); };
+    { return ImGui::DragFloat3(label, &v.x, 0.01f, 0.0f, 1000.0f); };
 
     constexpr auto edit_color = [](const char *label, vec3 &v)
     { return ImGui::ColorEdit3(label, &v.x); };
@@ -1234,8 +1234,7 @@ void make_scene_ui(Scene &scene,
             {
                 if (edit_vec3("absorption", v.absorption))
                     volumes_changed = true;
-                if (ImGui::DragFloat(
-                        "scattering", &v.scattering, 0.01f, 0.0f, 1000.0f))
+                if (edit_vec3("scattering", v.scattering))
                     volumes_changed = true;
                 if (ImGui::DragFloat("phase_anisotropy",
                                      &v.phase_anisotropy,
