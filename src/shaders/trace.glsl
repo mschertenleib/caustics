@@ -15,8 +15,8 @@ struct Surface
 struct Volume
 {
     vec3 absorption;
-    vec3 scattering;
     float phase_anisotropy;
+    vec3 scattering;
 };
 
 struct Line
@@ -44,7 +44,8 @@ struct Parabola
     vec2 vertex;
     vec2 axis;
     float focal;
-    float clip;
+    float clip_offset;
+    vec2 clip_normal;
     uint surface_id;
     uint volume_in_id;
     uint volume_out_id;
@@ -174,6 +175,7 @@ bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout ve
     if (t0 > 0.0 && t0 < t)
     {
         vec2 rel = perp * side - h * direction;
+        // FIXME: do we want to reverse the inequality to stay consistent with the parabolas?
         if (dot(arc.clip_normal, rel) >= arc.clip_offset)
         {
             t = t0;
@@ -227,7 +229,7 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
 
         float y = tr * dy + oy;
         float x = (y * y) / (4.0 * f);
-        if (x > parabola.clip)
+        if (dot(parabola.clip_normal, vec2(x, y)) > parabola.clip_offset)
         {
             return false;
         }
@@ -272,7 +274,7 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     {
         float y = t0 * dy + oy;
         float x = (y * y) / (4.0 * f);
-        if (x <= parabola.clip)
+        if (dot(parabola.clip_normal, vec2(x, y)) <= parabola.clip_offset)
         {
             t = t0;
             local = vec2(x, y);
@@ -284,7 +286,7 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     {
         float y = t1 * dy + oy;
         float x = (y * y) / (4.0 * f);
-        if (x <= parabola.clip)
+        if (dot(parabola.clip_normal, vec2(x, y)) <= parabola.clip_offset)
         {
             t = t1;
             local = vec2(x, y);

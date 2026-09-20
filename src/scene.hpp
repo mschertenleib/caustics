@@ -35,9 +35,8 @@ struct alignas(16) Surface
 struct alignas(16) Volume
 {
     vec3 absorption;
-    float _padding;
-    vec3 scattering;
     float phase_anisotropy;
+    vec3 scattering;
 };
 
 struct alignas(16) Line
@@ -65,7 +64,8 @@ struct alignas(16) Parabola
     vec2 vertex;
     vec2 axis;
     float focal;
-    float clip;
+    float clip_offset;
+    vec2 clip_normal;
     std::uint32_t surface_id;
     std::uint32_t volume_in_id;
     std::uint32_t volume_out_id;

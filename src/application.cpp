@@ -1294,9 +1294,9 @@ void make_scene_ui(Scene &scene,
                     arcs_changed = true;
                 if (ImGui::DragFloat("radius", &a.radius, 0.01f, 0.0f, 1000.0f))
                     arcs_changed = true;
-                if (edit_vec2("a", a.clip_normal))
+                if (edit_unit_vec2("clip normal", a.clip_normal))
                     arcs_changed = true;
-                if (ImGui::DragFloat("b", &a.clip_offset, 0.01f))
+                if (ImGui::DragFloat("clip offset", &a.clip_offset, 0.01f))
                     arcs_changed = true;
                 if (edit_material_id("surface_id", a.surface_id))
                     arcs_changed = true;
@@ -1329,7 +1329,9 @@ void make_scene_ui(Scene &scene,
                     parabolas_changed = true;
                 if (ImGui::DragFloat("focal", &p.focal, 0.01f, 0.0f, 1000.0f))
                     parabolas_changed = true;
-                if (ImGui::DragFloat("clip", &p.clip, 0.01f, 0.0f, 1000.0f))
+                if (edit_unit_vec2("clip normal", p.clip_normal))
+                    parabolas_changed = true;
+                if (ImGui::DragFloat("clip offset", &p.clip_offset, 0.01f))
                     parabolas_changed = true;
                 if (edit_material_id("surface_id", p.surface_id))
                     parabolas_changed = true;
