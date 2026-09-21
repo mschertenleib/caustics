@@ -109,6 +109,7 @@ constexpr std::size_t max_parabolas {
     f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
     f(PFNGLGETSTRINGIPROC, glGetStringi);                                      \
     f(PFNGLFINISHPROC, glFinish);                                              \
+    f(PFNGLBLENDEQUATIONPROC, glBlendEquation);                                \
     f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
     f(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
     f(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
@@ -859,7 +860,9 @@ void create_raster_geometry(const Scene &scene,
         const auto end_right = line.vertex_b - delta_left + delta_up;
         const auto aspect_ratio = line_length / thickness;
 
-        const auto color = scene.surfaces[line.surface_id].base_color;
+        vec3 color {1.0f, 1.0f, 1.0f};
+        if (line.surface_id != invalid_id)
+            color = scene.surfaces[line.surface_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -896,7 +899,9 @@ void create_raster_geometry(const Scene &scene,
         const auto cutoff = arc.clip_offset / half_side;
         const auto bottom_coord = bottom_y / half_side;
 
-        const auto color = scene.surfaces[arc.surface_id].base_color;
+        vec3 color {1.0f, 1.0f, 1.0f};
+        if (arc.surface_id != invalid_id)
+            color = scene.surfaces[arc.surface_id].base_color;
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
@@ -1080,6 +1085,7 @@ void Application::init()
     fbo = create_framebuffer(target_texture.get());
 
     glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 #ifndef __EMSCRIPTEN__
@@ -1503,7 +1509,16 @@ void Application::main_loop_update()
     bool arcs_changed {};
     bool parabolas_changed {};
 
-    if (ImGui::Begin("UI"))
+    auto *const vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize({300.0f, vp->Size.y}, ImGuiCond_Once);
+    ImGui::SetNextWindowSizeConstraints({100.0f, vp->Size.y},
+                                        {600.0f, vp->Size.y});
+    constexpr ImGuiWindowFlags window_flags {ImGuiWindowFlags_NoMove};
+
+    ImVec2 window_pos {};
+    ImVec2 window_size {};
+    if (ImGui::Begin("UI", nullptr, window_flags))
     {
         ImGui::Text("%.3f ms/frame (%.2f fps)",
                     static_cast<double>(1000.0f / ImGui::GetIO().Framerate),
@@ -1566,8 +1581,29 @@ void Application::main_loop_update()
                       lines_changed,
                       arcs_changed,
                       parabolas_changed);
+
+        window_pos = ImGui::GetWindowPos();
+        window_size = ImGui::GetWindowSize();
+    }
+    else
+    {
+        window_pos = ImVec2(0.0f, 0.0f);
+        window_size = ImVec2(0.0f, 0.0f);
     }
     ImGui::End();
+
+    // FIXME: we need to use this for our viewport bounds, but we need the
+    // viewport in the input processing before the UI is drawn. So we need to
+    // save the viewport for next frame.
+    const auto viewport_x = window_pos.x + window_size.x;
+    const auto viewport_y = vp->Pos.y;
+    const auto viewport_width = vp->Size.x - viewport_x;
+    const auto viewport_height = vp->Size.y;
+    std::cout << std::format("Viewport ({}, {}) ({}, {})\n",
+                             viewport_x,
+                             viewport_y,
+                             viewport_width,
+                             viewport_height);
 
     ImGui::Render();
 
@@ -1623,12 +1659,20 @@ void Application::main_loop_update()
                      static_cast<GLuint>(texture_height));
         glBindVertexArray(empty_vao.get());
 
+        // FIXME
+        if (sample_index == 0)
+        {
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+
         // new_average = alpha * sample_average + (1 - alpha) * old_average
-        const auto alpha =
+        /*const auto alpha =
             static_cast<float>(samples_this_frame) /
             static_cast<float>(sample_index + samples_this_frame);
         glBlendColor(alpha, alpha, alpha, alpha);
-        glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+        glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);*/
+        glBlendFunc(GL_ONE, GL_ONE);
 
         glViewport(0, 0, texture_width, texture_height);
         glDrawArrays(GL_TRIANGLES, 0, 3);

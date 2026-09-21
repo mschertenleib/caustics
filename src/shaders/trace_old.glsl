@@ -570,44 +570,13 @@ bool evaluate_volume(Volume volume, float t, inout vec2 ray_origin, inout vec2 r
     return false;
 }
 
-void main()
+vec3 compute_radiance(vec2 ray_origin, vec2 ray_direction, inout uint rng_state)
 {
-    uvec2 pixel = uvec2(gl_FragCoord.xy);
-    uint pixel_index = pixel.y * image_size.x + pixel.x;
-    uint rng_state = hash(pixel_index) ^ hash(uint(sample_index));
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
 
-    bool alive = false;
-    vec2 ray_origin;
-    vec2 ray_direction;
-    vec3 radiance;
-    vec3 throughput;
-    int depth;
-
-    vec4 accumulated_color = vec4(0.0);
-
-    for (int i = 0; i < samples_per_frame * 16; ++i)
+    for (int depth = 0; depth <= 32; ++depth)
     {
-        if (!alive)
-        {
-            if (i > 0)
-                accumulated_color += vec4(radiance, 1.0);
-            
-            vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
-            ray_origin = view_position + (uv - 0.5) * view_size;
-            float angle = 2.0 * PI * random(rng_state);
-            ray_direction = vec2(cos(angle), sin(angle));
-            radiance = vec3(0.0);
-            throughput = vec3(1.0);
-            depth = 0;
-            alive = true;
-        }
-
-        if (depth >= 32)
-        {
-            alive = false;
-            continue;
-        }
-
         // Russian Roulette termination
         // NOTE: this is equivalent to doing it on the previous iteration
         // just before any "continue" and at the end of the loop body.
@@ -619,12 +588,10 @@ void main()
                 1.0);
             if (random(rng_state) >= survival_prob)
             {
-                alive = false;
-                continue;
+                break;
             }
             throughput /= survival_prob;
         }
-        ++depth;
 
         float t;
         vec2 local;
@@ -633,8 +600,7 @@ void main()
         bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
         if (!is_hit)
         {
-            alive = false;
-            continue;
+            break;
         }
 
         Hit hit = get_hit(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
@@ -665,6 +631,26 @@ void main()
 
         evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, rng_state);
     }
-    
-    out_color = accumulated_color;
+
+    return radiance;
+}
+
+void main()
+{
+    uvec2 pixel = uvec2(gl_FragCoord.xy);
+    uint pixel_index = pixel.y * image_size.x + pixel.x;
+    uint rng_state = hash(pixel_index) ^ hash(uint(sample_index));
+
+    vec4 accumulated_color = vec4(0.0);
+    for (int i = 0; i < samples_per_frame; ++i)
+    {
+        vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
+        vec2 ray_origin = view_position + (uv - 0.5) * view_size;
+        float angle = 2.0 * PI * random(rng_state);
+        vec2 ray_direction = vec2(cos(angle), sin(angle));
+        vec3 radiance = compute_radiance(ray_origin, ray_direction, rng_state);
+        accumulated_color += vec4(radiance, 1.0);
+    }
+
+    out_color = accumulated_color / float(samples_per_frame);
 }
