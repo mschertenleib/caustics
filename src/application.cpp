@@ -954,6 +954,7 @@ void Application::init()
         glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
     if (window_ptr == nullptr)
     {
+        // FIXME ???
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
@@ -1599,11 +1600,11 @@ void Application::main_loop_update()
     const auto viewport_y = vp->Pos.y;
     const auto viewport_width = vp->Size.x - viewport_x;
     const auto viewport_height = vp->Size.y;
-    std::cout << std::format("Viewport ({}, {}) ({}, {})\n",
+    /*std::cout << std::format("Viewport ({}, {}) ({}, {})\n",
                              viewport_x,
                              viewport_y,
                              viewport_width,
-                             viewport_height);
+                             viewport_height);*/
 
     ImGui::Render();
 
