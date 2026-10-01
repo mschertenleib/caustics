@@ -60,6 +60,19 @@ struct Hit
     uint volume_out_id;
 };
 
+struct AABB
+{
+    vec2 min;
+    vec2 max;
+};
+
+struct BVH_node
+{
+    AABB aabbs[2];
+    uint child0;
+    uint child1;
+};
+
 
 
 layout(std140) uniform Surfaces { Surface surfaces[MAX_SURFACES]; };
@@ -67,10 +80,12 @@ layout(std140) uniform Volumes { Volume volumes[MAX_VOLUMES]; };
 layout(std140) uniform Lines { Line lines[MAX_LINES]; };
 layout(std140) uniform Arcs { Arc arcs[MAX_ARCS]; };
 layout(std140) uniform Parabolas { Parabola parabolas[MAX_PARABOLAS]; };
+layout(std140) uniform BVH_nodes { BVH_node bvh_nodes[MAX_BVH_NODES]; };
 
 uniform uint num_lines;
 uniform uint num_arcs;
 uniform uint num_parabolas;
+uniform uint num_bvh_nodes;
 uniform int sample_index;
 uniform int samples_per_frame;
 uniform vec2 view_position;
@@ -94,7 +109,8 @@ out vec4 out_color;
 #define SURFACE_SPECULAR 1u
 #define SURFACE_DIELECTRIC 2u
 
-#define INVALID_ID 0xFFFFFFFFu
+#define INVALID_ID 0xffffffffu
+#define INVALID_CHILD 0xffffffffu
 
 
 
@@ -103,237 +119,6 @@ float cross2(vec2 a, vec2 b)
 {
     return a.x * b.y - a.y * b.x;
 }
-
-#if 0
-
-bool intersect_line(vec2 origin, vec2 direction, Line line, inout float t, inout vec2 local)
-{
-    vec2 s = line.vertex_b - line.vertex_a;
-    vec2 q = line.vertex_a - origin;
-    float denom = cross2(direction, s);
-    float denom_sq_eps = 16.0 * FLOAT_EPSILON * FLOAT_EPSILON * dot(s, s);
-    if (denom * denom <= denom_sq_eps)
-    {
-        return false;
-    }
-
-    float tr = cross2(q, s) / denom;
-    float u  = cross2(q, direction) / denom;
-    if (tr <= 0.0 || tr >= t || u < 0.0 || u > 1.0)
-    {
-        return false;
-    }
-
-    t = tr;
-    local = vec2(u, 0.0);
-    return true;
-}
-
-bool intersect_arc(vec2 origin, vec2 direction, Arc arc, inout float t, inout vec2 local)
-{
-    float radius_sq = arc.radius * arc.radius;
-    vec2 m = origin - arc.center;
-
-    // Signed perpendicular distance from the center to the ray
-    float perp = cross2(direction, m);
-
-    // Half chord squared
-    float perp_sq = perp * perp;
-    float h_sq = radius_sq - perp_sq;
-
-    // Allow a small negative error at tangency
-    float h_sq_scale = radius_sq + perp_sq;
-    float h_sq_eps = 4.0 * FLOAT_EPSILON * h_sq_scale;
-    if (h_sq < -h_sq_eps)
-    {
-        return false;
-    }
-
-    float h = sqrt(max(h_sq, 0.0));
-    float b = dot(m, direction);
-    float c = dot(m, m) - radius_sq;
-    float q = -(b + (b >= 0.0 ? h : -h));
-    if (q == 0.0) // q == 0 implies t = 0
-    {
-        return false;
-    }
-
-    float t0 = q;
-    float t1 = c / q;
-
-    // t0 must be the nearest root
-    if (t1 < t0)
-    {
-        float tmp = t0;
-        t0 = t1;
-        t1 = tmp;
-    }
-
-    // Orthonormal basis vector perpendicular to the ray
-    vec2 side = vec2(-direction.y, direction.x);
-
-    if (t0 > 0.0 && t0 < t)
-    {
-        vec2 rel = perp * side - h * direction;
-        // FIXME: we want to reverse the inequality to stay consistent with the parabolas
-        if (dot(arc.clip_normal, rel) >= arc.clip_offset)
-        {
-            t = t0;
-            local = rel;
-            return true;
-        }
-    }
-
-    if (t1 > 0.0 && t1 < t)
-    {
-        vec2 rel = perp * side + h * direction;
-        if (dot(arc.clip_normal, rel) >= arc.clip_offset)
-        {
-            t = t1;
-            local = rel;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout float t, inout vec2 local)
-{
-    vec2 axis = parabola.axis;
-    vec2 side = vec2(-axis.y, axis.x);
-
-    vec2 ro = origin - parabola.vertex;
-    float ox = dot(ro, axis);
-    float oy = dot(ro, side);
-    float dx = dot(direction, axis);
-    float dy = dot(direction, side);
-    float f = parabola.focal;
-    float a = dy * dy;
-    float b = oy * dy - 2.0 * f * dx;
-    float c = oy * oy - 4.0 * f * ox;
-
-    // Exactly parallel to the parabola axis
-    if (a == 0.0)
-    {
-        if (b == 0.0)
-        {
-            return false;
-        }
-
-        float tr = -c / (2.0 * b);
-        if (tr <= 0.0 || tr >= t)
-        {
-            return false;
-        }
-
-        float y = tr * dy + oy;
-        float x = (y * y) / (4.0 * f);
-        if (dot(parabola.clip_normal, vec2(x, y)) > parabola.clip_offset)
-        {
-            return false;
-        }
-
-        t = tr;
-        local = vec2(x, y);
-        return true;
-    }
-
-    float dx_sq = dx * dx;
-    float dy_sq = dy * dy;
-    float dxdy = dx * dy;
-    float term0 = f * dx_sq;
-    float term1 = oy * dxdy;
-    float term2 = ox * dy_sq;
-    float base = term0 - term1 + term2;
-    float base_scale = abs(term0) + abs(term1) + abs(term2);
-    float base_eps = 4.0 * FLOAT_EPSILON * base_scale;
-    if (base < -base_eps)
-    {
-        return false;
-    }
-
-    float sqrt_disc = 2.0 * sqrt(f * max(base, 0.0));
-    float q = -(b + (b >= 0.0 ? sqrt_disc : -sqrt_disc));
-    if (q == 0.0) // q == 0 implies t = 0
-    {
-        return false;
-    }
-
-    float t0 = q / a;
-    float t1 = c / q;
-
-    // t0 must be the nearest root
-    if (t1 < t0)
-    {
-        float tmp = t0;
-        t0 = t1;
-        t1 = tmp;
-    }
-
-    if (t0 > 0.0 && t0 < t)
-    {
-        float y = t0 * dy + oy;
-        float x = (y * y) / (4.0 * f);
-        if (dot(parabola.clip_normal, vec2(x, y)) <= parabola.clip_offset)
-        {
-            t = t0;
-            local = vec2(x, y);
-            return true;
-        }
-    }
-
-    if (t1 > 0.0 && t1 < t)
-    {
-        float y = t1 * dy + oy;
-        float x = (y * y) / (4.0 * f);
-        if (dot(parabola.clip_normal, vec2(x, y)) <= parabola.clip_offset)
-        {
-            t = t1;
-            local = vec2(x, y);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uint geometry_type, out uint geometry_index)
-{
-    t = FLOAT_MAX;
-    local = vec2(0.0);
-    geometry_type = GEOMETRY_NONE;
-    geometry_index = INVALID_ID;
-
-    for (uint i = 0u; i < num_lines; ++i)
-    {
-        if (intersect_line(origin, direction, lines[i], t, local))
-        {
-            geometry_type = GEOMETRY_LINE;
-            geometry_index = i;
-        }
-    }
-    for (uint i = 0u; i < num_arcs; ++i)
-    {
-        if (intersect_arc(origin, direction, arcs[i], t, local))
-        {
-            geometry_type = GEOMETRY_ARC;
-            geometry_index = i;
-        }
-    }
-    for (uint i = 0u; i < num_parabolas; ++i)
-    {
-        if (intersect_parabola(origin, direction, parabolas[i], t, local))
-        {
-            geometry_type = GEOMETRY_PARABOLA;
-            geometry_index = i;
-        }
-    }
-
-    return geometry_type != GEOMETRY_NONE;
-}
-
-#else
 
 bool intersect_line(vec2 origin, vec2 direction, Line line, inout float t, inout vec2 local, out uint parity)
 {
@@ -567,6 +352,8 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     return hit;
 }
 
+#if 1
+
 bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uint geometry_type, out uint geometry_index, out uint volume_mask)
 {
     t = FLOAT_MAX;
@@ -609,6 +396,162 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uin
         }
         if (parabola.volume_in_id != INVALID_ID) volume_mask ^= parity << parabola.volume_in_id;
         if (parabola.volume_out_id != INVALID_ID) volume_mask ^= parity << parabola.volume_out_id;
+    }
+
+    return geometry_type != GEOMETRY_NONE;
+}
+
+#else
+
+
+bool is_leaf(uint child)
+{
+    return (child & 0x80000000u) != 0u;
+}
+
+uint leaf_type(uint child)
+{
+    return (child >> 8u) & 0xffu;
+}
+
+uint leaf_index(uint child)
+{
+    return child & 0xffu;
+}
+
+bool intersect_aabb(vec2 origin, vec2 direction, vec2 inv_direction, AABB box, inout float t)
+{
+    if (direction.x == 0.0 && (origin.x < box.min.x || origin.x > box.max.x))
+    {
+        return false;
+    }
+
+    if (direction.y == 0.0 && (origin.y < box.min.y || origin.y > box.max.y))
+    {
+        return false;
+    }
+
+    vec2 t0 = (box.min - origin) * inv_direction;
+    vec2 t1 = (box.max - origin) * inv_direction;
+
+    vec2 t_min = min(t0, t1);
+    vec2 t_max = max(t0, t1);
+
+    float lo = max(max(t_min.x, t_min.y), 0.0);
+    float hi = min(t_max.x, t_max.y);
+
+    t = lo;
+    return lo <= hi;
+}
+
+void intersect_primitive(vec2 origin, vec2 direction, uint primitive_ref, inout float t, inout vec2 local, inout uint geometry_type, inout uint geometry_index, inout uint volume_mask)
+{
+    uint type = leaf_type(primitive_ref);
+    uint index = leaf_index(primitive_ref);
+
+    uint parity;
+
+    switch (type)
+    {
+        case GEOMETRY_LINE:
+        {
+            Line line = lines[index];
+            if (intersect_line(origin, direction, line, t, local, parity))
+            {
+                geometry_type = GEOMETRY_LINE;
+                geometry_index = index;
+            }
+            if (line.volume_in_id != INVALID_ID) volume_mask ^= parity << line.volume_in_id;
+            if (line.volume_out_id != INVALID_ID) volume_mask ^= parity << line.volume_out_id;
+            break;
+        }
+        case GEOMETRY_ARC:
+        {
+            Arc arc = arcs[index];
+            if (intersect_arc(origin, direction, arc, t, local, parity))
+            {
+                geometry_type = GEOMETRY_ARC;
+                geometry_index = index;
+            }
+            if (arc.volume_in_id != INVALID_ID) volume_mask ^= parity << arc.volume_in_id;
+            if (arc.volume_out_id != INVALID_ID) volume_mask ^= parity << arc.volume_out_id;
+            break;
+        }
+        case GEOMETRY_PARABOLA:
+        {
+            Parabola parabola = parabolas[index];
+            if (intersect_parabola(origin, direction, parabola, t, local, parity))
+            {
+                geometry_type = GEOMETRY_PARABOLA;
+                geometry_index = index;
+            }
+            if (parabola.volume_in_id != INVALID_ID) volume_mask ^= parity << parabola.volume_in_id;
+            if (parabola.volume_out_id != INVALID_ID) volume_mask ^= parity << parabola.volume_out_id;
+            break;
+        }
+    }
+}
+
+bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uint geometry_type, out uint geometry_index, out uint volume_mask)
+{
+    t = FLOAT_MAX;
+    local = vec2(0.0);
+    geometry_type = GEOMETRY_NONE;
+    geometry_index = INVALID_ID;
+    volume_mask = 0u;
+
+    if (num_bvh_nodes == 0)
+    {
+        return false;
+    }
+
+    vec2 inv_direction = 1.0 / direction;
+
+#define MAX_BVH_STACK_SIZE 16  // TODO: might have to be tweaked
+    uint stack[MAX_BVH_STACK_SIZE];
+    uint stack_size = 0u;
+
+    stack[stack_size++] = 0u;
+
+    while (stack_size != 0u)
+    {
+        uint ref = stack[--stack_size];
+
+        if (is_leaf(ref))
+        {
+            intersect_primitive(origin, direction, ref, t, local, geometry_type, geometry_index, volume_mask);
+            continue;
+        }
+
+        BVH_node node = bvh_nodes[ref];
+
+        float t0;
+        float t1;
+        bool hit0 = node.child0 != INVALID_CHILD && intersect_aabb(origin, direction, inv_direction, node.aabbs[0], t0);
+        bool hit1 = node.child1 != INVALID_CHILD && intersect_aabb(origin, direction, inv_direction, node.aabbs[1], t1);
+
+        if (hit0 && hit1)
+        {
+            // Push furthest child first
+            if (t0 < t1)
+            {
+                stack[stack_size++] = node.child1;
+                stack[stack_size++] = node.child0;
+            }
+            else
+            {
+                stack[stack_size++] = node.child0;
+                stack[stack_size++] = node.child1;
+            }
+        }
+        else if (hit0)
+        {
+            stack[stack_size++] = node.child0;
+        }
+        else if (hit1)
+        {
+            stack[stack_size++] = node.child1;
+        }
     }
 
     return geometry_type != GEOMETRY_NONE;
@@ -714,7 +657,15 @@ vec2 sample_diffuse(vec2 normal, inout uint rng_state)
     return cos_theta * normal + sin_theta * tangent;
 }
 
-void evaluate_surface(Hit hit, Surface surface, inout vec2 ray_origin, inout vec2 ray_direction, inout vec3 throughput, inout uint rng_state)
+void evaluate_surface(
+    Hit hit,
+    Surface surface,
+    inout vec2 ray_origin,
+    inout vec2 ray_direction,
+    inout vec3 throughput,
+    out float pdf, // Actual PDF if non-delta, else branch probability
+    out bool is_delta,
+    inout uint rng_state)
 {
     // hit.normal: object normal, defining "inside" and "outside"
     // normal:     opposes the incoming ray
@@ -728,6 +679,8 @@ void evaluate_surface(Hit hit, Surface surface, inout vec2 ray_origin, inout vec
         ray_origin = offset_position_along_normal(hit.position, normal);
         ray_direction = sample_diffuse(normal, rng_state);
         throughput *= surface.base_color;
+        pdf = max(dot(normal, ray_direction), 0.0) * 0.5;
+        is_delta = false;
     } 
     else if (surface.type == SURFACE_SPECULAR) 
     {
@@ -737,7 +690,9 @@ void evaluate_surface(Hit hit, Surface surface, inout vec2 ray_origin, inout vec
         vec3 f0 = surface.base_color;
         float c = max(1.0 - cos_theta_i, 0.0);
         vec3 fresnel_reflectance = f0 + (1.0 - f0) * (c * c * c * c * c);
-        throughput *= fresnel_reflectance; 
+        throughput *= fresnel_reflectance;
+        pdf = 1.0;
+        is_delta = true;
     } 
     else if (surface.type == SURFACE_DIELECTRIC) 
     {
@@ -748,6 +703,8 @@ void evaluate_surface(Hit hit, Surface surface, inout vec2 ray_origin, inout vec
         {
             ray_origin = offset_position_along_normal(hit.position, normal);
             ray_direction = reflect(ray_direction, normal);
+            pdf = 1.0;
+            is_delta = true;
             return;
         }
 
@@ -758,16 +715,20 @@ void evaluate_surface(Hit hit, Surface surface, inout vec2 ray_origin, inout vec
         float c = max(1.0 - cos_fresnel, 0.0);
         float fresnel_reflectance = f0 + (1.0 - f0) * c * c * c * c * c;
 
-        if (random(rng_state) < fresnel_reflectance)
+        if (random(rng_state) < fresnel_reflectance) // Reflect
         {
             ray_origin = offset_position_along_normal(hit.position, normal);
             ray_direction = reflect(ray_direction, normal);
+            pdf = fresnel_reflectance;
+            is_delta = true;
         }
-        else
+        else // Refract
         {
             ray_origin = offset_position_along_normal(hit.position, -normal);
             ray_direction = eta * ray_direction + (eta * cos_theta_i - cos_theta_t) * normal;
             throughput *= surface.base_color * eta;
+            pdf = 1.0 - fresnel_reflectance;
+            is_delta = true;
         }
     }
 }
@@ -863,6 +824,13 @@ uint lsb_index(uint u)
     return e;
 }
 
+// Fit c0, c1, c2 from target RGB
+float spectrum(float lambda, float c0, float c1, float c2)
+{
+    float x = (c0 * lambda + c1) * lambda + c2;
+    return 0.5 * x * inversesqrt(x * x + 1.0) + 0.5;
+}
+
 void main()
 {
     uvec2 pixel = uvec2(gl_FragCoord.xy);
@@ -879,7 +847,7 @@ void main()
     vec4 accumulated_color = vec4(0.0);
 
     // FIXME
-    int segments_per_frame = samples_per_frame * 16;
+    int segments_per_frame = samples_per_frame * 8;
 
     for (int i = 0; i < segments_per_frame; ++i)
     {
@@ -922,12 +890,8 @@ void main()
         vec2 local;
         uint geometry_type;
         uint geometry_index;
-#if 1
         uint volume_mask;
         bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index, volume_mask);
-#else
-        bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
-#endif
         if (!is_hit)
         {
             accumulated_color += vec4(radiance, 1.0);
@@ -937,16 +901,9 @@ void main()
 
         Hit hit = get_hit(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
 
-        bool is_entering = dot(ray_direction, hit.normal) < 0.0;
-#if 0
-        uint volume_id = is_entering ? hit.volume_out_id : hit.volume_in_id;
-        if (volume_id != INVALID_ID)
-        {
-#else
         if (volume_mask != 0u)
         {
             uint volume_id = lsb_index(volume_mask);
-#endif
             Volume volume = volumes[volume_id];
             bool scatter = evaluate_volume(volume, t, ray_origin, ray_direction, throughput, rng_state);
             if (scatter)
@@ -954,11 +911,11 @@ void main()
                 continue;
             }
         }
-
+        
         if (hit.surface_id == INVALID_ID)
         {
             // No surface interaction, continue tracing in the same direction
-            vec2 inside_normal = is_entering ? -hit.normal : hit.normal;
+            vec2 inside_normal = dot(ray_direction, hit.normal) >= 0.0 ? hit.normal : -hit.normal;
             ray_origin = offset_position_along_normal(hit.position, inside_normal);
             continue;
         }
@@ -967,7 +924,9 @@ void main()
 
         radiance += throughput * surface.emission_color * surface.emission_strength;
 
-        evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, rng_state);
+        float pdf;
+        bool is_delta;
+        evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, pdf, is_delta, rng_state);
     }
     
     out_color = accumulated_color;
