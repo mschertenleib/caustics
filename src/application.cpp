@@ -51,8 +51,6 @@ constexpr std::size_t max_volumes {32};
 constexpr std::size_t max_lines {256};
 constexpr std::size_t max_arcs {256};
 constexpr std::size_t max_parabolas {256};
-constexpr std::size_t max_primitives {256};
-constexpr std::size_t max_bvh_nodes {256};
 constexpr std::size_t max_ubo_size {16'384};
 
 static_assert(max_surfaces * sizeof(Surface) <= max_ubo_size);
@@ -60,7 +58,6 @@ static_assert(max_volumes * sizeof(Volume) <= max_ubo_size);
 static_assert(max_lines * sizeof(Line) <= max_ubo_size);
 static_assert(max_arcs * sizeof(Arc) <= max_ubo_size);
 static_assert(max_parabolas * sizeof(Parabola) <= max_ubo_size);
-static_assert(max_bvh_nodes * sizeof(BVH_node) <= max_ubo_size);
 
 #define ENUMERATE_GL_FUNCTIONS_COMMON(f)                                       \
     f(PFNGLENABLEPROC, glEnable);                                              \
@@ -302,7 +299,6 @@ struct Application
     Unique_handle<GLuint, GL_array_deleter> lines_ubo {};
     Unique_handle<GLuint, GL_array_deleter> arcs_ubo {};
     Unique_handle<GLuint, GL_array_deleter> parabolas_ubo {};
-    Unique_handle<GLuint, GL_array_deleter> bvh_ubo {};
     float thickness {}; // In fraction of the view height
     Raster_geometry raster_geometry {};
     Unique_handle<GLuint, GL_array_deleter> vao {};
@@ -549,15 +545,13 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                     "#define MAX_VOLUMES {}u\n"
                                     "#define MAX_LINES {}u\n"
                                     "#define MAX_ARCS {}u\n"
-                                    "#define MAX_PARABOLAS {}u\n"
-                                    "#define MAX_BVH_NODES {}u\n",
+                                    "#define MAX_PARABOLAS {}u\n",
                                     glsl_version,
                                     max_surfaces,
                                     max_volumes,
                                     max_lines,
                                     max_arcs,
-                                    max_parabolas,
-                                    max_bvh_nodes);
+                                    max_parabolas);
     const char *const fragment_shader_sources[] {header.c_str(),
                                                  fragment_shader_code.c_str()};
     const auto fragment_shader =
@@ -951,66 +945,6 @@ void push_scene_geometry(const Scene &scene,
     }
 }
 
-void push_bvh_geometry(const Scene &scene,
-                       float thickness,
-                       Raster_geometry &geometry)
-{
-    thickness *= scene.view_height;
-
-    const auto push_aabb = [&](const AABB &aabb, const vec3 &color)
-    {
-        const vec2 p0 {aabb.min.x, aabb.min.y};
-        const vec2 p1 {aabb.max.x, aabb.min.y};
-        const vec2 p2 {aabb.max.x, aabb.max.y};
-        const vec2 p3 {aabb.min.x, aabb.max.y};
-        push_line({p0, p1, color, thickness}, geometry);
-        push_line({p1, p2, color, thickness}, geometry);
-        push_line({p2, p3, color, thickness}, geometry);
-        push_line({p3, p0, color, thickness}, geometry);
-    };
-
-    constexpr vec3 color_root {1.0f, 1.0f, 1.0f};
-    constexpr vec3 color_deepest {1.0f, 0.0f, 0.0f};
-
-    std::vector<std::uint32_t> depths(scene.bvh_nodes.size());
-    std::uint32_t max_depth {0};
-
-    struct Stack_entry
-    {
-        std::uint32_t node_index;
-        std::uint32_t depth;
-    };
-    std::vector<Stack_entry> stack;
-    stack.push_back({0, 0});
-
-    while (!stack.empty())
-    {
-        const auto [node_index, depth] = stack.back();
-        stack.pop_back();
-
-        depths[node_index] = depth;
-        max_depth = std::max(max_depth, depth);
-
-        for (const auto child : scene.bvh_nodes[node_index].children)
-        {
-            if ((child & 0x80000000u) == 0u) // FIXME
-            {
-                stack.push_back({child, depth + 1});
-            }
-        }
-    }
-
-    for (std::size_t i {0}; i < scene.bvh_nodes.size(); ++i)
-    {
-        const auto t = (max_depth > 0) ? static_cast<float>(depths[i]) /
-                                             static_cast<float>(max_depth)
-                                       : 0.0f;
-        const auto color = color_root * (1.0f - t) + color_deepest * t;
-        push_aabb(scene.bvh_nodes[i].aabbs[0], color);
-        push_aabb(scene.bvh_nodes[i].aabbs[1], color);
-    }
-}
-
 void create_vertex_and_index_data(Raster_geometry &geometry)
 {
     geometry.vertices.clear();
@@ -1272,14 +1206,12 @@ void Application::init()
     lines_ubo = create_uniform_buffer(max_lines * sizeof(Line));
     arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
     parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
-    bvh_ubo = create_uniform_buffer(max_bvh_nodes * sizeof(BVH_node));
 
     upload_uniform_buffer(surfaces_ubo.get(), scene.surfaces);
     upload_uniform_buffer(volumes_ubo.get(), scene.volumes);
     upload_uniform_buffer(lines_ubo.get(), scene.lines);
     upload_uniform_buffer(arcs_ubo.get(), scene.arcs);
     upload_uniform_buffer(parabolas_ubo.get(), scene.parabolas);
-    upload_uniform_buffer(bvh_ubo.get(), scene.bvh_nodes);
 
     const auto bind_ubo = [program = trace_program.get()](
                               GLuint ubo, const char *name, GLuint binding)
@@ -1293,11 +1225,9 @@ void Application::init()
     bind_ubo(lines_ubo.get(), "Lines", 3);
     bind_ubo(arcs_ubo.get(), "Arcs", 4);
     bind_ubo(parabolas_ubo.get(), "Parabolas", 5);
-    bind_ubo(bvh_ubo.get(), "BVH_nodes", 6);
 
     thickness = 0.0075f;
     push_scene_geometry(scene, thickness, raster_geometry);
-    push_bvh_geometry(scene, thickness, raster_geometry);
     create_vertex_and_index_data(raster_geometry);
 
     // TODO: we should probably organize the raster geometry better. We need to
@@ -1618,7 +1548,6 @@ void Application::main_loop_update()
             // world space
             clear_geometry(raster_geometry);
             push_scene_geometry(scene, thickness, raster_geometry);
-            push_bvh_geometry(scene, thickness, raster_geometry);
             create_vertex_and_index_data(raster_geometry);
             update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
         }
@@ -1831,8 +1760,6 @@ void Application::main_loop_update()
         glUniform1ui(loc_num_arcs, static_cast<GLuint>(scene.arcs.size()));
         glUniform1ui(loc_num_parabolas,
                      static_cast<GLuint>(scene.parabolas.size()));
-        glUniform1ui(loc_num_bvh_nodes,
-                     static_cast<GLuint>(scene.bvh_nodes.size()));
         glUniform1i(loc_sample_index, static_cast<GLint>(sample_index));
         glUniform1i(loc_samples_per_frame,
                     static_cast<GLint>(samples_this_frame));

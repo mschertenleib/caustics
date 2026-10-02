@@ -71,18 +71,6 @@ struct alignas(16) Parabola
     std::uint32_t volume_out_id;
 };
 
-struct AABB
-{
-    vec2 min;
-    vec2 max;
-};
-
-struct alignas(16) BVH_node
-{
-    AABB aabbs[2];
-    std::uint32_t children[2];
-};
-
 struct Scene
 {
     float view_x;
@@ -94,7 +82,6 @@ struct Scene
     std::vector<Line> lines;
     std::vector<Arc> arcs;
     std::vector<Parabola> parabolas;
-    std::vector<BVH_node> bvh_nodes;
 };
 
 [[nodiscard]] Scene create_scene(int texture_width, int texture_height);

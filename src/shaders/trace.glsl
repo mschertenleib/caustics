@@ -60,19 +60,6 @@ struct Hit
     uint volume_out_id;
 };
 
-struct AABB
-{
-    vec2 min;
-    vec2 max;
-};
-
-struct BVH_node
-{
-    AABB aabbs[2];
-    uint child0;
-    uint child1;
-};
-
 
 
 layout(std140) uniform Surfaces { Surface surfaces[MAX_SURFACES]; };
@@ -80,12 +67,10 @@ layout(std140) uniform Volumes { Volume volumes[MAX_VOLUMES]; };
 layout(std140) uniform Lines { Line lines[MAX_LINES]; };
 layout(std140) uniform Arcs { Arc arcs[MAX_ARCS]; };
 layout(std140) uniform Parabolas { Parabola parabolas[MAX_PARABOLAS]; };
-layout(std140) uniform BVH_nodes { BVH_node bvh_nodes[MAX_BVH_NODES]; };
 
 uniform uint num_lines;
 uniform uint num_arcs;
 uniform uint num_parabolas;
-uniform uint num_bvh_nodes;
 uniform int sample_index;
 uniform int samples_per_frame;
 uniform vec2 view_position;
@@ -110,7 +95,6 @@ out vec4 out_color;
 #define SURFACE_DIELECTRIC 2u
 
 #define INVALID_ID 0xffffffffu
-#define INVALID_CHILD 0xffffffffu
 
 
 
@@ -352,8 +336,6 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     return hit;
 }
 
-#if 1
-
 bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uint geometry_type, out uint geometry_index, out uint volume_mask)
 {
     t = FLOAT_MAX;
@@ -400,164 +382,6 @@ bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uin
 
     return geometry_type != GEOMETRY_NONE;
 }
-
-#else
-
-
-bool is_leaf(uint child)
-{
-    return (child & 0x80000000u) != 0u;
-}
-
-uint leaf_type(uint child)
-{
-    return (child >> 8u) & 0xffu;
-}
-
-uint leaf_index(uint child)
-{
-    return child & 0xffu;
-}
-
-bool intersect_aabb(vec2 origin, vec2 direction, vec2 inv_direction, AABB box, inout float t)
-{
-    if (direction.x == 0.0 && (origin.x < box.min.x || origin.x > box.max.x))
-    {
-        return false;
-    }
-
-    if (direction.y == 0.0 && (origin.y < box.min.y || origin.y > box.max.y))
-    {
-        return false;
-    }
-
-    vec2 t0 = (box.min - origin) * inv_direction;
-    vec2 t1 = (box.max - origin) * inv_direction;
-
-    vec2 t_min = min(t0, t1);
-    vec2 t_max = max(t0, t1);
-
-    float lo = max(max(t_min.x, t_min.y), 0.0);
-    float hi = min(t_max.x, t_max.y);
-
-    t = lo;
-    return lo <= hi;
-}
-
-void intersect_primitive(vec2 origin, vec2 direction, uint primitive_ref, inout float t, inout vec2 local, inout uint geometry_type, inout uint geometry_index, inout uint volume_mask)
-{
-    uint type = leaf_type(primitive_ref);
-    uint index = leaf_index(primitive_ref);
-
-    uint parity;
-
-    switch (type)
-    {
-        case GEOMETRY_LINE:
-        {
-            Line line = lines[index];
-            if (intersect_line(origin, direction, line, t, local, parity))
-            {
-                geometry_type = GEOMETRY_LINE;
-                geometry_index = index;
-            }
-            if (line.volume_in_id != INVALID_ID) volume_mask ^= parity << line.volume_in_id;
-            if (line.volume_out_id != INVALID_ID) volume_mask ^= parity << line.volume_out_id;
-            break;
-        }
-        case GEOMETRY_ARC:
-        {
-            Arc arc = arcs[index];
-            if (intersect_arc(origin, direction, arc, t, local, parity))
-            {
-                geometry_type = GEOMETRY_ARC;
-                geometry_index = index;
-            }
-            if (arc.volume_in_id != INVALID_ID) volume_mask ^= parity << arc.volume_in_id;
-            if (arc.volume_out_id != INVALID_ID) volume_mask ^= parity << arc.volume_out_id;
-            break;
-        }
-        case GEOMETRY_PARABOLA:
-        {
-            Parabola parabola = parabolas[index];
-            if (intersect_parabola(origin, direction, parabola, t, local, parity))
-            {
-                geometry_type = GEOMETRY_PARABOLA;
-                geometry_index = index;
-            }
-            if (parabola.volume_in_id != INVALID_ID) volume_mask ^= parity << parabola.volume_in_id;
-            if (parabola.volume_out_id != INVALID_ID) volume_mask ^= parity << parabola.volume_out_id;
-            break;
-        }
-    }
-}
-
-bool intersect(vec2 origin, vec2 direction, out float t, out vec2 local, out uint geometry_type, out uint geometry_index, out uint volume_mask)
-{
-    t = FLOAT_MAX;
-    local = vec2(0.0);
-    geometry_type = GEOMETRY_NONE;
-    geometry_index = INVALID_ID;
-    volume_mask = 0u;
-
-    if (num_bvh_nodes == 0)
-    {
-        return false;
-    }
-
-    vec2 inv_direction = 1.0 / direction;
-
-#define MAX_BVH_STACK_SIZE 16  // TODO: might have to be tweaked
-    uint stack[MAX_BVH_STACK_SIZE];
-    uint stack_size = 0u;
-
-    stack[stack_size++] = 0u;
-
-    while (stack_size != 0u)
-    {
-        uint ref = stack[--stack_size];
-
-        if (is_leaf(ref))
-        {
-            intersect_primitive(origin, direction, ref, t, local, geometry_type, geometry_index, volume_mask);
-            continue;
-        }
-
-        BVH_node node = bvh_nodes[ref];
-
-        float t0;
-        float t1;
-        bool hit0 = node.child0 != INVALID_CHILD && intersect_aabb(origin, direction, inv_direction, node.aabbs[0], t0);
-        bool hit1 = node.child1 != INVALID_CHILD && intersect_aabb(origin, direction, inv_direction, node.aabbs[1], t1);
-
-        if (hit0 && hit1)
-        {
-            // Push furthest child first
-            if (t0 < t1)
-            {
-                stack[stack_size++] = node.child1;
-                stack[stack_size++] = node.child0;
-            }
-            else
-            {
-                stack[stack_size++] = node.child0;
-                stack[stack_size++] = node.child1;
-            }
-        }
-        else if (hit0)
-        {
-            stack[stack_size++] = node.child0;
-        }
-        else if (hit1)
-        {
-            stack[stack_size++] = node.child1;
-        }
-    }
-
-    return geometry_type != GEOMETRY_NONE;
-}
-
-#endif
 
 Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, uint geometry_type, uint geometry_index)
 {

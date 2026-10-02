@@ -9,256 +9,6 @@
 #include <sstream>
 #include <string>
 
-namespace
-{
-
-constexpr std::uint32_t invalid_child {
-    std::numeric_limits<std::uint32_t>::max()};
-
-constexpr AABB empty_aabb {
-    .min = {std::numeric_limits<float>::infinity(),
-            std::numeric_limits<float>::infinity()},
-    .max = {-std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity()},
-};
-
-enum struct Primitive_type : std::uint32_t
-{
-    line = 1,
-    arc = 2,
-    parabola = 3
-};
-
-struct Primitive
-{
-    AABB aabb;
-    vec2 centroid;
-    Primitive_type type;
-    std::uint32_t index;
-};
-
-[[nodiscard]] constexpr AABB compute_aabb(const Line &line) noexcept
-{
-    return {.min = {std::min(line.vertex_a.x, line.vertex_b.x),
-                    std::min(line.vertex_a.y, line.vertex_b.y)},
-            .max = {std::max(line.vertex_a.x, line.vertex_b.x),
-                    std::max(line.vertex_a.y, line.vertex_b.y)}};
-}
-
-[[nodiscard]] constexpr AABB compute_aabb(const Arc &arc) noexcept
-{
-    assert(false);
-    return {
-        .min = {std::numeric_limits<float>::infinity(),
-                std::numeric_limits<float>::infinity()},
-        .max = {-std::numeric_limits<float>::infinity(),
-                -std::numeric_limits<float>::infinity()},
-    };
-}
-
-[[nodiscard]] constexpr AABB compute_aabb(const Parabola &parabola) noexcept
-{
-    assert(false);
-    return {
-        .min = {std::numeric_limits<float>::infinity(),
-                std::numeric_limits<float>::infinity()},
-        .max = {-std::numeric_limits<float>::infinity(),
-                -std::numeric_limits<float>::infinity()},
-    };
-}
-
-[[nodiscard]] constexpr vec2 centroid(const AABB &aabb) noexcept
-{
-    return 0.5f * (aabb.max + aabb.min);
-}
-
-[[nodiscard]] constexpr AABB merge_aabb(const AABB &a, const AABB &b) noexcept
-{
-    return {.min = {std::min(a.min.x, b.min.x), std::min(a.min.y, b.min.y)},
-            .max = {std::max(a.max.x, b.max.x), std::max(a.max.y, b.max.y)}};
-}
-
-[[nodiscard]] constexpr AABB expand_aabb(const AABB &aabb,
-                                         const vec2 &point) noexcept
-{
-    return {
-        .min = {std::min(aabb.min.x, point.x), std::min(aabb.min.y, point.y)},
-        .max = {std::max(aabb.max.x, point.x), std::max(aabb.max.y, point.y)},
-    };
-}
-
-[[nodiscard]] constexpr float measure_aabb(const AABB &aabb) noexcept
-{
-    const auto dx = std::max(0.0f, aabb.max.x - aabb.min.x);
-    const auto dy = std::max(0.0f, aabb.max.y - aabb.min.y);
-    return dx + dy;
-}
-
-[[nodiscard]] constexpr bool is_leaf(std::uint32_t child) noexcept
-{
-    return (child & 0x80000000u) != 0u;
-}
-
-[[nodiscard]] constexpr Primitive_type leaf_type(std::uint32_t child) noexcept
-{
-    return static_cast<Primitive_type>((child >> 8u) & 0xffu);
-}
-
-[[nodiscard]] constexpr std::uint32_t leaf_index(std::uint32_t child) noexcept
-{
-    return child & 0xffu;
-}
-
-[[nodiscard]] constexpr std::uint32_t make_leaf(Primitive_type type,
-                                                std::uint32_t index) noexcept
-{
-    return 0x80000000u | (static_cast<std::uint32_t>(type) << 8u) | index;
-}
-
-[[nodiscard]] std::size_t partition_primitives(
-    std::vector<Primitive> &primitives, std::size_t begin, std::size_t end)
-{
-    auto centroid_bounds = empty_aabb;
-    for (auto i = begin; i < end; ++i)
-    {
-        centroid_bounds = expand_aabb(centroid_bounds, primitives[i].centroid);
-    }
-
-    const auto extent = centroid_bounds.max - centroid_bounds.min;
-    const auto axis = (extent.x >= extent.y) ? 0 : 1;
-    const auto mid = begin + (end - begin) / 2;
-
-    std::nth_element(primitives.begin() + static_cast<std::ptrdiff_t>(begin),
-                     primitives.begin() + static_cast<std::ptrdiff_t>(mid),
-                     primitives.begin() + static_cast<std::ptrdiff_t>(end),
-                     [axis](const Primitive &a, const Primitive &b)
-                     {
-                         return axis == 0 ? a.centroid.x < b.centroid.x
-                                          : a.centroid.y < b.centroid.y;
-                     });
-
-    return mid;
-}
-
-void build_bvh(Scene &scene)
-{
-    std::vector<Primitive> primitives;
-
-    const auto num_primitives =
-        scene.lines.size() + scene.arcs.size() + scene.parabolas.size();
-    if (num_primitives == 0)
-    {
-        return;
-    }
-
-    primitives.reserve(num_primitives);
-
-    const auto add_primitives = [&](Primitive_type type, const auto &prims)
-    {
-        for (std::uint32_t i {0}; i < static_cast<std::uint32_t>(prims.size());
-             ++i)
-        {
-            const auto aabb = compute_aabb(prims[i]);
-            primitives.push_back({.aabb = aabb,
-                                  .centroid = centroid(aabb),
-                                  .type = type,
-                                  .index = i});
-        }
-    };
-    add_primitives(Primitive_type::line, scene.lines);
-    add_primitives(Primitive_type::arc, scene.arcs);
-    add_primitives(Primitive_type::parabola, scene.parabolas);
-
-    scene.bvh_nodes.clear();
-    scene.bvh_nodes.reserve(num_primitives > 1 ? num_primitives - 1 : 1);
-
-    const auto push_node = [&]
-    {
-        const auto index = static_cast<std::uint32_t>(scene.bvh_nodes.size());
-        scene.bvh_nodes.push_back({.aabbs = {empty_aabb, empty_aabb},
-                                   .children = {invalid_child, invalid_child}});
-        return index;
-    };
-
-    const auto merge_range_aabb = [&](std::size_t begin, std::size_t end)
-    {
-        auto aabb = empty_aabb;
-        for (auto i = begin; i < end; ++i)
-        {
-            aabb = merge_aabb(aabb, primitives[i].aabb);
-        }
-        return aabb;
-    };
-
-    const auto root = push_node();
-
-    struct Primitive_range
-    {
-        std::size_t begin;
-        std::size_t end;
-        std::uint32_t node;
-    };
-
-    std::vector<Primitive_range> stack;
-    stack.reserve(primitives.size());
-    stack.push_back({.begin = 0, .end = primitives.size(), .node = root});
-
-    while (!stack.empty())
-    {
-        const auto primitive_range = stack.back();
-        stack.pop_back();
-
-        const auto count = primitive_range.end - primitive_range.begin;
-
-        if (count == 1)
-        {
-            const auto &p = primitives[primitive_range.begin];
-
-            auto &node = scene.bvh_nodes[primitive_range.node];
-            node.aabbs[0] = p.aabb;
-            node.children[0] = make_leaf(p.type, p.index);
-
-            continue;
-        }
-
-        if (count == 2)
-        {
-            const auto &p0 = primitives[primitive_range.begin + 0];
-            const auto &p1 = primitives[primitive_range.begin + 1];
-
-            auto &node = scene.bvh_nodes[primitive_range.node];
-            node.aabbs[0] = p0.aabb;
-            node.children[0] = make_leaf(p0.type, p0.index);
-            node.aabbs[1] = p1.aabb;
-            node.children[1] = make_leaf(p1.type, p1.index);
-
-            continue;
-        }
-
-        const auto mid = partition_primitives(
-            primitives, primitive_range.begin, primitive_range.end);
-
-        const auto aabb_0 = merge_range_aabb(primitive_range.begin, mid);
-        const auto aabb_1 = merge_range_aabb(mid, primitive_range.end);
-
-        const auto node_0 = push_node();
-        const auto node_1 = push_node();
-
-        auto &node = scene.bvh_nodes[primitive_range.node];
-        node.aabbs[0] = aabb_0;
-        node.aabbs[1] = aabb_1;
-        node.children[0] = node_0;
-        node.children[1] = node_1;
-
-        stack.push_back(
-            {.begin = mid, .end = primitive_range.end, .node = node_1});
-        stack.push_back(
-            {.begin = primitive_range.begin, .end = mid, .node = node_0});
-    }
-}
-
-} // namespace
-
 void to_json(nlohmann::json &j, const vec2 &v)
 {
     j = nlohmann::json::array({v.x, v.y});
@@ -434,7 +184,9 @@ Scene create_scene(int texture_width, int texture_height)
 
     std::minstd_rand rng(42);
     std::uniform_int_distribution<int> shape_dist(0, 2);
-    std::uniform_real_distribution<float> coord_dist(0.0f, 1.0f);
+    std::uniform_real_distribution<float> dist_01(0.0f, 1.0f);
+    std::uniform_real_distribution<float> coord_dist_x(0.1f, 0.9f);
+    std::uniform_real_distribution<float> coord_dist_y(0.05f, 0.6f);
     std::uniform_real_distribution<float> radius_dist(0.0f, 0.3f);
     std::uniform_real_distribution<float> angle_dist(
         0.0f, 2.0f * std::numbers::pi_v<float>);
@@ -463,15 +215,14 @@ Scene create_scene(int texture_width, int texture_height)
         return {std::cos(angle), std::sin(angle)};
     };
 
-    for (int i {0}; i < 128; ++i)
+    for (int i {0}; i < 256; ++i)
     {
-        // const auto s = shape_dist(rng);
-        const auto s = 0;
+        const auto s = 0; // shape_dist(rng);
         if (s == 0)
         {
-            const vec2 vertex_a {coord_dist(rng), coord_dist(rng)};
-            const vec2 delta {0.05f * (2.0f * coord_dist(rng) - 1.0f),
-                              0.05f * (2.0f * coord_dist(rng) - 1.0f)};
+            const vec2 vertex_a {coord_dist_x(rng), coord_dist_y(rng)};
+            const vec2 delta {0.1f * (2.0f * dist_01(rng) - 1.0f),
+                              0.1f * (2.0f * dist_01(rng) - 1.0f)};
             scene.lines.push_back({.vertex_a = vertex_a,
                                    .vertex_b = vertex_a + delta,
                                    .surface_id = surface_id(),
@@ -482,18 +233,19 @@ Scene create_scene(int texture_width, int texture_height)
         {
             const auto radius = radius_dist(rng);
             std::uniform_real_distribution<float> clip_dist(-radius, radius);
-            scene.arcs.push_back({.center = {coord_dist(rng), coord_dist(rng)},
-                                  .radius = radius,
-                                  .clip_offset = clip_dist(rng),
-                                  .clip_normal = dir(),
-                                  .surface_id = surface_id(),
-                                  .volume_in_id = invalid_id,
-                                  .volume_out_id = invalid_id});
+            scene.arcs.push_back(
+                {.center = {coord_dist_x(rng), coord_dist_y(rng)},
+                 .radius = radius,
+                 .clip_offset = clip_dist(rng),
+                 .clip_normal = dir(),
+                 .surface_id = surface_id(),
+                 .volume_in_id = invalid_id,
+                 .volume_out_id = invalid_id});
         }
         else
         {
             scene.parabolas.push_back(
-                {.vertex = {coord_dist(rng), coord_dist(rng)},
+                {.vertex = {coord_dist_x(rng), coord_dist_y(rng)},
                  .axis = dir(),
                  .focal = radius_dist(rng),
                  .clip_offset = radius_dist(rng),
@@ -656,8 +408,6 @@ Scene create_scene(int texture_width, int texture_height)
                          .volume_in_id = invalid_id,
                          .volume_out_id = invalid_id}};
 #endif
-
-    build_bvh(scene);
 
     return scene;
 }
