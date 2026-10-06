@@ -60,7 +60,7 @@ Scene create_scene(int texture_width, int texture_height)
     scene.view_width = view_width;
     scene.view_height = view_height;
 
-#if 0
+#if 1
     scene.surfaces = {Surface {.base_color = {0.75f, 0.75f, 0.75f},
                                .type = Surface_type::diffuse,
                                .emissive_color = {1.0f, 1.0f, 1.0f},
@@ -153,8 +153,8 @@ Scene create_scene(int texture_width, int texture_height)
     scene.parabolas = {Parabola {.vertex = {0.86f, 0.66f},
                                  .axis = normalize(vec2 {-1.0f, -2.0f}),
                                  .focal = 0.01f,
-                                 .clip_offset = 0.1f,
-                                 .clip_normal = {1.0f, 0.0f},
+                                 .clip_x_min = -0.06f,
+                                 .clip_x_max = 0.06f,
                                  .surface_id = 3,
                                  .volume_in_id = invalid_id,
                                  .volume_out_id = invalid_id}};
@@ -183,11 +183,10 @@ Scene create_scene(int texture_width, int texture_height)
                                .ior_ratio = 1.0f}};
 
     std::minstd_rand rng(42);
-    std::uniform_int_distribution<int> shape_dist(0, 2);
     std::uniform_real_distribution<float> dist_01(0.0f, 1.0f);
     std::uniform_real_distribution<float> coord_dist_x(0.1f, 0.9f);
     std::uniform_real_distribution<float> coord_dist_y(0.05f, 0.6f);
-    std::uniform_real_distribution<float> radius_dist(0.0f, 0.3f);
+    std::uniform_real_distribution<float> radius_dist(0.0f, 0.2f);
     std::uniform_real_distribution<float> angle_dist(
         0.0f, 2.0f * std::numbers::pi_v<float>);
     std::uniform_real_distribution<float> angle_x_dist(
@@ -209,51 +208,43 @@ Scene create_scene(int texture_width, int texture_height)
         const auto angle = angle_dist(rng);
         return {std::cos(angle), std::sin(angle)};
     };
-    const auto x_dir = [&] -> vec2
-    {
-        const auto angle = angle_x_dist(rng);
-        return {std::cos(angle), std::sin(angle)};
-    };
 
     for (int i {0}; i < 256; ++i)
     {
-        const auto s = 0; // shape_dist(rng);
-        if (s == 0)
-        {
-            const vec2 vertex_a {coord_dist_x(rng), coord_dist_y(rng)};
-            const vec2 delta {0.1f * (2.0f * dist_01(rng) - 1.0f),
-                              0.1f * (2.0f * dist_01(rng) - 1.0f)};
-            scene.lines.push_back({.vertex_a = vertex_a,
-                                   .vertex_b = vertex_a + delta,
-                                   .surface_id = surface_id(),
-                                   .volume_in_id = invalid_id,
-                                   .volume_out_id = invalid_id});
-        }
-        else if (s == 1)
-        {
-            const auto radius = radius_dist(rng);
-            std::uniform_real_distribution<float> clip_dist(-radius, radius);
-            scene.arcs.push_back(
-                {.center = {coord_dist_x(rng), coord_dist_y(rng)},
-                 .radius = radius,
-                 .clip_offset = clip_dist(rng),
-                 .clip_normal = dir(),
-                 .surface_id = surface_id(),
-                 .volume_in_id = invalid_id,
-                 .volume_out_id = invalid_id});
-        }
-        else
-        {
-            scene.parabolas.push_back(
-                {.vertex = {coord_dist_x(rng), coord_dist_y(rng)},
-                 .axis = dir(),
-                 .focal = radius_dist(rng),
-                 .clip_offset = radius_dist(rng),
-                 .clip_normal = x_dir(),
-                 .surface_id = surface_id(),
-                 .volume_in_id = invalid_id,
-                 .volume_out_id = invalid_id});
-        }
+#if 1
+        const vec2 vertex_a {coord_dist_x(rng), coord_dist_y(rng)};
+        const vec2 delta {0.1f * (2.0f * dist_01(rng) - 1.0f),
+                          0.1f * (2.0f * dist_01(rng) - 1.0f)};
+        scene.lines.push_back({.vertex_a = vertex_a,
+                               .vertex_b = vertex_a + delta,
+                               .surface_id = surface_id(),
+                               .volume_in_id = invalid_id,
+                               .volume_out_id = invalid_id});
+#endif
+
+#if 1
+        const auto radius = radius_dist(rng);
+        std::uniform_real_distribution<float> clip_dist(-radius, radius);
+        scene.arcs.push_back({.center = {coord_dist_x(rng), coord_dist_y(rng)},
+                              .radius = radius,
+                              .clip_offset = clip_dist(rng),
+                              .clip_normal = dir(),
+                              .surface_id = surface_id(),
+                              .volume_in_id = invalid_id,
+                              .volume_out_id = invalid_id});
+#endif
+
+#if 1
+        scene.parabolas.push_back(
+            {.vertex = {coord_dist_x(rng), coord_dist_y(rng)},
+             .axis = dir(),
+             .focal = 0.6f * radius_dist(rng),
+             .clip_x_min = -radius_dist(rng),
+             .clip_x_max = radius_dist(rng),
+             .surface_id = surface_id(),
+             .volume_in_id = invalid_id,
+             .volume_out_id = invalid_id});
+#endif
     }
 
 #elif 1

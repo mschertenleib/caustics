@@ -44,8 +44,8 @@ struct Parabola
     vec2 vertex;
     vec2 axis;
     float focal;
-    float clip_offset;
-    vec2 clip_normal;
+    float clip_x_min;
+    float clip_x_max;
     uint surface_id;
     uint volume_in_id;
     uint volume_out_id;
@@ -222,17 +222,17 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
     parity = 0u;
 
     vec2 axis = parabola.axis;
-    vec2 side = vec2(-axis.y, axis.x);
+    vec2 right = vec2(axis.y, -axis.x);
 
     vec2 ro = origin - parabola.vertex;
-    float ox = dot(ro, axis);
-    float oy = dot(ro, side);
-    float dx = dot(direction, axis);
-    float dy = dot(direction, side);
+    float ox = dot(ro, right);
+    float oy = dot(ro, axis);
+    float dx = dot(direction, right);
+    float dy = dot(direction, axis);
     float f = parabola.focal;
-    float a = dy * dy;
-    float b = oy * dy - 2.0 * f * dx;
-    float c = oy * oy - 4.0 * f * ox;
+    float a = dx * dx;
+    float b = ox * dx - 2.0 * f * dy;
+    float c = ox * ox - 4.0 * f * oy;
 
     // Exactly parallel to the parabola axis
     if (a == 0.0)
@@ -248,9 +248,8 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
             return false;
         }
 
-        float y = tr * dy + oy;
-        float x = (y * y) / (4.0 * f);
-        if (dot(parabola.clip_normal, vec2(x, y)) > parabola.clip_offset)
+        float x = ox;
+        if (x < parabola.clip_x_min || x > parabola.clip_x_max)
         {
             return false;
         }
@@ -263,16 +262,17 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
         }
 
         t = tr;
+        float y = x * x / (4.0 * f);
         local = vec2(x, y);
         return true;
     }
 
     float dx_sq = dx * dx;
     float dy_sq = dy * dy;
-    float dxdy = dx * dy;
-    float term0 = f * dx_sq;
-    float term1 = oy * dxdy;
-    float term2 = ox * dy_sq;
+    float dx_dy = dx * dy;
+    float term0 = f * dy_sq;
+    float term1 = ox * dx_dy;
+    float term2 = oy * dx_sq;
     float base = term0 - term1 + term2;
     float base_scale = abs(term0) + abs(term1) + abs(term2);
     float base_eps = 4.0 * FLOAT_EPSILON * base_scale;
@@ -303,14 +303,14 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
 
     if (t0 > 0.0)
     {
-        float y = t0 * dy + oy;
-        float x = (y * y) / (4.0 * f);
-        if (dot(parabola.clip_normal, vec2(x, y)) <= parabola.clip_offset)
+        float x = t0 * dx + ox;
+        if (x >= parabola.clip_x_min && x <= parabola.clip_x_max)
         {
             parity ^= 1u;
             if (t0 < t)
             {
                 t = t0;
+                float y = x * x / (4.0 * f);
                 local = vec2(x, y);
                 hit = true;
             }
@@ -319,14 +319,14 @@ bool intersect_parabola(vec2 origin, vec2 direction, Parabola parabola, inout fl
 
     if (t1 > 0.0)
     {
-        float y = t1 * dy + oy;
-        float x = (y * y) / (4.0 * f);
-        if (dot(parabola.clip_normal, vec2(x, y)) <= parabola.clip_offset)
+        float x = t1 * dx + ox;
+        if (x >= parabola.clip_x_min && x <= parabola.clip_x_max)
         {
             parity ^= 1u;
             if (t1 < t)
             {
                 t = t1;
+                float y = x * x / (4.0 * f);
                 local = vec2(x, y);
                 hit = true;
             }
@@ -416,9 +416,10 @@ Hit get_hit(vec2 origin, vec2 direction, float t, vec2 local, uint geometry_type
         case GEOMETRY_PARABOLA:
         {
             Parabola parabola = parabolas[geometry_index];
-            vec2 side = vec2(-parabola.axis.y, parabola.axis.x);
-            hit.position = local.x * parabola.axis + local.y * side + parabola.vertex;
-            hit.normal = normalize(-2.0 * parabola.focal * parabola.axis + local.y * side);
+            vec2 right = vec2(parabola.axis.y, -parabola.axis.x);
+            hit.position = local.x * right + local.y * parabola.axis + parabola.vertex;
+            // Points towards the lower side (away from the axis)
+            hit.normal = normalize(local.x * right - 2.0 * parabola.focal * parabola.axis);
             hit.surface_id = parabola.surface_id;
             hit.volume_in_id = parabola.volume_in_id;
             hit.volume_out_id = parabola.volume_out_id;

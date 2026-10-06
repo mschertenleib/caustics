@@ -64,8 +64,8 @@ struct alignas(16) Parabola
     vec2 vertex;
     vec2 axis;
     float focal;
-    float clip_offset;
-    vec2 clip_normal;
+    float clip_x_min;
+    float clip_x_max;
     std::uint32_t surface_id;
     std::uint32_t volume_in_id;
     std::uint32_t volume_out_id;

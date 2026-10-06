@@ -203,6 +203,7 @@ struct Window_state
     float scale_y;
     int framebuffer_width;
     int framebuffer_height;
+    bool framebuffer_size_changed;
     float scroll_offset;
 };
 
@@ -229,8 +230,8 @@ struct Raster_parabola
     vec2 vertex;
     vec2 axis;
     float focal;
-    float clip_offset;
-    vec2 clip_normal;
+    float clip_x_min;
+    float clip_x_max;
     vec3 color;
     float thickness;
 };
@@ -238,7 +239,8 @@ struct Raster_parabola
 struct Vertex
 {
     vec2 position;
-    vec4 local;
+    vec2 local;
+    vec4 params;
     vec3 color;
 };
 
@@ -247,12 +249,12 @@ struct Raster_geometry
     std::vector<Raster_line> lines;
     std::vector<Raster_arc> arcs;
     std::vector<Raster_parabola> parabolas;
-    std::size_t circle_indices_offset;
-    std::size_t circle_indices_size;
     std::size_t line_indices_offset;
     std::size_t line_indices_size;
     std::size_t arc_indices_offset;
     std::size_t arc_indices_size;
+    std::size_t parabola_indices_offset;
+    std::size_t parabola_indices_size;
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
 };
@@ -279,7 +281,6 @@ struct Application
     GLint loc_num_lines {};
     GLint loc_num_arcs {};
     GLint loc_num_parabolas {};
-    GLint loc_num_bvh_nodes {};
     GLint loc_image_size {};
     GLint loc_sample_index {};
     GLint loc_samples_per_frame {};
@@ -299,16 +300,16 @@ struct Application
     Unique_handle<GLuint, GL_array_deleter> lines_ubo {};
     Unique_handle<GLuint, GL_array_deleter> arcs_ubo {};
     Unique_handle<GLuint, GL_array_deleter> parabolas_ubo {};
-    float thickness {}; // In fraction of the view height
+    float thickness {}; // In fraction of the view height // FIXME
     Raster_geometry raster_geometry {};
     Unique_handle<GLuint, GL_array_deleter> vao {};
     Unique_handle<GLuint, GL_array_deleter> vbo {};
     Unique_handle<GLuint, GL_array_deleter> ibo {};
-    Unique_handle<GLuint, GL_deleter> circle_program {};
+    Unique_handle<GLuint, GL_deleter> parabola_program {};
     Unique_handle<GLuint, GL_deleter> line_program {};
     Unique_handle<GLuint, GL_deleter> arc_program {};
-    GLint loc_view_position_draw_circle {};
-    GLint loc_view_size_draw_circle {};
+    GLint loc_view_position_draw_parabola {};
+    GLint loc_view_size_draw_parabola {};
     GLint loc_view_position_draw_line {};
     GLint loc_view_size_draw_line {};
     GLint loc_view_position_draw_arc {};
@@ -382,6 +383,7 @@ void glfw_framebuffer_size_callback(GLFWwindow *window, int width, int height)
 
     window_state->framebuffer_width = width;
     window_state->framebuffer_height = height;
+    window_state->framebuffer_size_changed = true;
 }
 
 void glfw_scroll_callback(GLFWwindow *window,
@@ -529,8 +531,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
     return program;
 }
 
-[[nodiscard]] auto create_trace_program(const char *glsl_version,
-                                        const Scene &scene)
+[[nodiscard]] auto create_trace_program(const char *glsl_version)
 {
     const auto vertex_shader_code = read_file("shaders/fullscreen.vert");
     const char *const vertex_shader_sources[] {
@@ -539,7 +540,7 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                                              std::size(vertex_shader_sources),
                                              vertex_shader_sources);
 
-    const auto fragment_shader_code = read_file("shaders/trace.glsl");
+    const auto fragment_shader_code = read_file("shaders/trace.frag");
     const auto header = std::format("{}\n"
                                     "#define MAX_SURFACES {}u\n"
                                     "#define MAX_VOLUMES {}u\n"
@@ -560,6 +561,37 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
                       fragment_shader_sources);
 
     return create_program_object(vertex_shader.get(), fragment_shader.get());
+}
+
+[[nodiscard]] auto create_shapes_programs(const char *glsl_version)
+{
+    const auto vertex_shader_code = read_file("shaders/shapes.vert");
+    const char *const vertex_shader_sources[] {
+        glsl_version, "\n", vertex_shader_code.c_str()};
+    const auto vertex_shader = create_shader(GL_VERTEX_SHADER,
+                                             std::size(vertex_shader_sources),
+                                             vertex_shader_sources);
+
+    const auto fragment_shader_code = read_file("shaders/shapes.frag");
+
+    const auto make_program = [&](const char *define)
+    {
+        const char *const fragment_shader_sources[] {
+            glsl_version,
+            "\n#define ",
+            define,
+            "\n",
+            fragment_shader_code.c_str()};
+        const auto fragment_shader =
+            create_shader(GL_FRAGMENT_SHADER,
+                          std::size(fragment_shader_sources),
+                          fragment_shader_sources);
+        return create_program_object(vertex_shader.get(),
+                                     fragment_shader.get());
+    };
+
+    return std::tuple {
+        make_program("LINE"), make_program("ARC"), make_program("PARABOLA")};
 }
 
 [[nodiscard]] auto create_program(const char *glsl_version,
@@ -717,6 +749,12 @@ create_vertex_and_index_buffers(const Raster_geometry &geometry)
                           sizeof(Vertex),
                           reinterpret_cast<void *>(offsetof(Vertex, local)));
     glVertexAttribPointer(2,
+                          sizeof(Vertex::params) / sizeof(float),
+                          GL_FLOAT,
+                          GL_FALSE,
+                          sizeof(Vertex),
+                          reinterpret_cast<void *>(offsetof(Vertex, params)));
+    glVertexAttribPointer(3,
                           sizeof(Vertex::color) / sizeof(float),
                           GL_FLOAT,
                           GL_FALSE,
@@ -725,6 +763,7 @@ create_vertex_and_index_buffers(const Raster_geometry &geometry)
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
+    glEnableVertexAttribArray(3);
 
     glBindVertexArray(0);
 
@@ -925,8 +964,10 @@ void push_scene_geometry(const Scene &scene,
     {
         push_arc({.center = arc.center,
                   .radius = arc.radius,
-                  .clip_offset = arc.clip_offset,
-                  .clip_normal = arc.clip_normal,
+                  .clip_offset = arc.clip_normal != vec2 {} ? arc.clip_offset
+                                                            : -arc.radius,
+                  .clip_normal = arc.clip_normal != vec2 {} ? arc.clip_normal
+                                                            : vec2 {0.0f, 1.0f},
                   .color = get_color(arc.surface_id),
                   .thickness = thickness},
                  geometry);
@@ -937,46 +978,67 @@ void push_scene_geometry(const Scene &scene,
         push_parabola({.vertex = parabola.vertex,
                        .axis = parabola.axis,
                        .focal = parabola.focal,
-                       .clip_offset = parabola.clip_offset,
-                       .clip_normal = parabola.clip_normal,
+                       .clip_x_min = parabola.clip_x_min,
+                       .clip_x_max = parabola.clip_x_max,
                        .color = get_color(parabola.surface_id),
                        .thickness = thickness},
                       geometry);
     }
 }
 
-void create_vertex_and_index_data(Raster_geometry &geometry)
+void create_vertex_and_index_data(Raster_geometry &geometry,
+                                  float view_height,
+                                  int viewport_height)
 {
     geometry.vertices.clear();
     geometry.indices.clear();
+
+    const auto pixel_size = view_height / static_cast<float>(viewport_height);
+    const auto half_pixel_size = pixel_size * 0.5f;
 
     geometry.line_indices_offset = geometry.indices.size();
     for (const auto &line : geometry.lines)
     {
         const auto line_vec = line.vertex_b - line.vertex_a;
         const auto line_length = norm(line_vec);
-        const auto line_dir = line_vec * (1.0f / line_length);
-        const auto delta_left =
-            vec2 {-line_dir.y, line_dir.x} * (line.thickness * 0.5f);
-        const auto delta_up = line_dir * (line.thickness * 0.5f);
-        const auto start_left = line.vertex_a + delta_left - delta_up;
-        const auto start_right = line.vertex_a - delta_left - delta_up;
-        const auto end_left = line.vertex_b + delta_left + delta_up;
-        const auto end_right = line.vertex_b - delta_left + delta_up;
-        const auto aspect_ratio = line_length / line.thickness;
+        const auto local_x_max = line.thickness + half_pixel_size;
+        const auto local_x_min = -local_x_max;
+        const auto local_y_min = -local_x_max;
+        const auto local_y_max = line_length + line.thickness + half_pixel_size;
+
+        const auto up = line_vec * (1.0f / line_length);
+        const vec2 right {up.y, -up.x};
+        const auto bottom_left =
+            line.vertex_a + local_x_min * right + local_y_min * up;
+        const auto bottom_right =
+            line.vertex_a + local_x_max * right + local_y_min * up;
+        const auto top_right =
+            line.vertex_a + local_x_max * right + local_y_max * up;
+        const auto top_left =
+            line.vertex_a + local_x_min * right + local_y_max * up;
 
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
-        geometry.vertices.push_back({start_left,
-                                     {-0.5f, 0.5f, -aspect_ratio - 0.5f, 0.0f},
-                                     line.color});
-        geometry.vertices.push_back({start_right,
-                                     {0.5f, 0.5f, -aspect_ratio - 0.5f, 0.0f},
-                                     line.color});
         geometry.vertices.push_back(
-            {end_right, {0.5f, -aspect_ratio - 0.5f, 0.5f, 0.0f}, line.color});
+            {.position = bottom_left,
+             .local = {local_x_min, local_y_min},
+             .params = {line_length, 0.0f, 0.0f, line.thickness},
+             .color = line.color});
         geometry.vertices.push_back(
-            {end_left, {-0.5f, -aspect_ratio - 0.5f, 0.5f, 0.0f}, line.color});
+            {.position = bottom_right,
+             .local = {local_x_max, local_y_min},
+             .params = {line_length, 0.0f, 0.0f, line.thickness},
+             .color = line.color});
+        geometry.vertices.push_back(
+            {.position = top_right,
+             .local = {local_x_max, local_y_max},
+             .params = {line_length, 0.0f, 0.0f, line.thickness},
+             .color = line.color});
+        geometry.vertices.push_back(
+            {.position = top_left,
+             .local = {local_x_min, local_y_max},
+             .params = {line_length, 0.0f, 0.0f, line.thickness},
+             .color = line.color});
         geometry.indices.push_back(first_index + 0);
         geometry.indices.push_back(first_index + 1);
         geometry.indices.push_back(first_index + 2);
@@ -990,33 +1052,50 @@ void create_vertex_and_index_data(Raster_geometry &geometry)
     geometry.arc_indices_offset = geometry.indices.size();
     for (const auto &arc : geometry.arcs)
     {
-        const auto half_side = arc.radius + 0.5f * arc.thickness;
-        const auto bottom_y = arc.clip_offset - 0.5f * arc.thickness;
-        const auto dir = arc.clip_normal;
-        const auto left = vec2 {-dir.y, dir.x};
-        const auto bottom_left = arc.center + dir * bottom_y + left * half_side;
+        const auto dir_end_y = arc.clip_offset / arc.radius;
+        const auto dir_end_x = std::sqrt(1.0f - dir_end_y * dir_end_y);
+        const auto local_x_max =
+            arc.clip_offset > 0.0f
+                ? dir_end_x * arc.radius + arc.thickness + half_pixel_size
+                : arc.radius + arc.thickness + half_pixel_size;
+        const auto local_x_min = -local_x_max;
+        const auto local_y_min =
+            arc.clip_offset - arc.thickness - half_pixel_size;
+        const auto local_y_max = arc.radius + arc.thickness + half_pixel_size;
+
+        const auto up = arc.clip_normal;
+        const vec2 right {up.y, -up.x};
+        const auto bottom_left =
+            arc.center + local_x_min * right + local_y_min * up;
         const auto bottom_right =
-            arc.center + dir * bottom_y - left * half_side;
-        const auto top_right = arc.center + (dir - left) * half_side;
-        const auto top_left = arc.center + (dir + left) * half_side;
-        const auto rel_thickness = arc.thickness / half_side;
-        const auto cutoff = arc.clip_offset / half_side;
-        const auto bottom_coord = bottom_y / half_side;
+            arc.center + local_x_max * right + local_y_min * up;
+        const auto top_right =
+            arc.center + local_x_max * right + local_y_max * up;
+        const auto top_left =
+            arc.center + local_x_min * right + local_y_max * up;
 
         const auto first_index =
             static_cast<std::uint32_t>(geometry.vertices.size());
         geometry.vertices.push_back(
-            {bottom_left,
-             {-1.0, bottom_coord, rel_thickness, cutoff},
-             arc.color});
+            {.position = bottom_left,
+             .local = {local_x_min, local_y_min},
+             .params = {dir_end_x, dir_end_y, arc.radius, arc.thickness},
+             .color = arc.color});
         geometry.vertices.push_back(
-            {bottom_right,
-             {1.0f, bottom_coord, rel_thickness, cutoff},
-             arc.color});
+            {.position = bottom_right,
+             .local = {local_x_max, local_y_min},
+             .params = {dir_end_x, dir_end_y, arc.radius, arc.thickness},
+             .color = arc.color});
         geometry.vertices.push_back(
-            {top_right, {1.0f, 1.0f, rel_thickness, cutoff}, arc.color});
+            {.position = top_right,
+             .local = {local_x_max, local_y_max},
+             .params = {dir_end_x, dir_end_y, arc.radius, arc.thickness},
+             .color = arc.color});
         geometry.vertices.push_back(
-            {top_left, {-1.0f, 1.0f, rel_thickness, cutoff}, arc.color});
+            {.position = top_left,
+             .local = {local_x_min, local_y_max},
+             .params = {dir_end_x, dir_end_y, arc.radius, arc.thickness},
+             .color = arc.color});
         geometry.indices.push_back(first_index + 0);
         geometry.indices.push_back(first_index + 1);
         geometry.indices.push_back(first_index + 2);
@@ -1026,6 +1105,78 @@ void create_vertex_and_index_data(Raster_geometry &geometry)
     }
     geometry.arc_indices_size =
         geometry.indices.size() - geometry.arc_indices_offset;
+
+    geometry.parabola_indices_offset = geometry.indices.size();
+    for (const auto &parabola : geometry.parabolas)
+    {
+        const auto clip_x_min = parabola.clip_x_min;
+        const auto clip_x_max = parabola.clip_x_max;
+
+        // Closest x to the vertex at x = 0
+        const auto x0 = std::clamp(0.0f, clip_x_min, clip_x_max);
+        const auto curve_y_min = (x0 * x0) / (4.0f * parabola.focal);
+        const auto curve_y_max =
+            std::max(clip_x_min * clip_x_min, clip_x_max * clip_x_max) /
+            (4.0f * parabola.focal);
+        const auto local_x_min =
+            clip_x_min - parabola.thickness - half_pixel_size;
+        const auto local_x_max =
+            clip_x_max + parabola.thickness + half_pixel_size;
+        const auto local_y_min =
+            curve_y_min - parabola.thickness - half_pixel_size;
+        const auto local_y_max =
+            curve_y_max + parabola.thickness + half_pixel_size;
+
+        const auto up = parabola.axis;
+        const vec2 right {up.y, -up.x};
+        const auto bottom_left =
+            parabola.vertex + local_x_min * right + local_y_min * up;
+        const auto bottom_right =
+            parabola.vertex + local_x_max * right + local_y_min * up;
+        const auto top_right =
+            parabola.vertex + local_x_max * right + local_y_max * up;
+        const auto top_left =
+            parabola.vertex + local_x_min * right + local_y_max * up;
+
+        const auto first_index =
+            static_cast<std::uint32_t>(geometry.vertices.size());
+        geometry.vertices.push_back({.position = bottom_left,
+                                     .local = {local_x_min, local_y_min},
+                                     .params = {parabola.focal,
+                                                clip_x_min,
+                                                clip_x_max,
+                                                parabola.thickness},
+                                     .color = parabola.color});
+        geometry.vertices.push_back({.position = bottom_right,
+                                     .local = {local_x_max, local_y_min},
+                                     .params = {parabola.focal,
+                                                clip_x_min,
+                                                clip_x_max,
+                                                parabola.thickness},
+                                     .color = parabola.color});
+        geometry.vertices.push_back({.position = top_right,
+                                     .local = {local_x_max, local_y_max},
+                                     .params = {parabola.focal,
+                                                clip_x_min,
+                                                clip_x_max,
+                                                parabola.thickness},
+                                     .color = parabola.color});
+        geometry.vertices.push_back({.position = top_left,
+                                     .local = {local_x_min, local_y_max},
+                                     .params = {parabola.focal,
+                                                clip_x_min,
+                                                clip_x_max,
+                                                parabola.thickness},
+                                     .color = parabola.color});
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 1);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 0);
+        geometry.indices.push_back(first_index + 2);
+        geometry.indices.push_back(first_index + 3);
+    }
+    geometry.parabola_indices_size =
+        geometry.indices.size() - geometry.parabola_indices_offset;
 }
 
 void Application::init()
@@ -1162,14 +1313,12 @@ void Application::init()
 
     target_texture = create_target_texture(texture_width, texture_height);
 
-    trace_program = create_trace_program(glsl_version, scene);
+    trace_program = create_trace_program(glsl_version);
     empty_vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
     loc_num_lines = glGetUniformLocation(trace_program.get(), "num_lines");
     loc_num_arcs = glGetUniformLocation(trace_program.get(), "num_arcs");
     loc_num_parabolas =
         glGetUniformLocation(trace_program.get(), "num_parabolas");
-    loc_num_bvh_nodes =
-        glGetUniformLocation(trace_program.get(), "num_bvh_nodes");
     loc_image_size = glGetUniformLocation(trace_program.get(), "image_size");
     loc_sample_index =
         glGetUniformLocation(trace_program.get(), "sample_index");
@@ -1226,9 +1375,14 @@ void Application::init()
     bind_ubo(arcs_ubo.get(), "Arcs", 4);
     bind_ubo(parabolas_ubo.get(), "Parabolas", 5);
 
-    thickness = 0.0075f;
+    thickness = 0.005f;
+    const auto viewport = centered_viewport(texture_width,
+                                            texture_height,
+                                            window_state.framebuffer_width,
+                                            window_state.framebuffer_height);
     push_scene_geometry(scene, thickness, raster_geometry);
-    create_vertex_and_index_data(raster_geometry);
+    create_vertex_and_index_data(
+        raster_geometry, scene.view_height, viewport.height);
 
     // TODO: we should probably organize the raster geometry better. We need to
     // clarify the distinction between updating the vertex buffer (when
@@ -1236,16 +1390,8 @@ void Application::init()
     // with a new size (when adding or removing objects).
     std::tie(vao, vbo, ibo) = create_vertex_and_index_buffers(raster_geometry);
 
-    circle_program = create_program(
-        glsl_version, "shaders/shader.vert", "shaders/circle.frag");
-    line_program = create_program(
-        glsl_version, "shaders/shader.vert", "shaders/line.frag");
-    arc_program =
-        create_program(glsl_version, "shaders/shader.vert", "shaders/arc.frag");
-    loc_view_position_draw_circle =
-        glGetUniformLocation(circle_program.get(), "view_position");
-    loc_view_size_draw_circle =
-        glGetUniformLocation(circle_program.get(), "view_size");
+    std::tie(line_program, arc_program, parabola_program) =
+        create_shapes_programs(glsl_version);
     loc_view_position_draw_line =
         glGetUniformLocation(line_program.get(), "view_position");
     loc_view_size_draw_line =
@@ -1254,6 +1400,10 @@ void Application::init()
         glGetUniformLocation(arc_program.get(), "view_position");
     loc_view_size_draw_arc =
         glGetUniformLocation(arc_program.get(), "view_size");
+    loc_view_position_draw_parabola =
+        glGetUniformLocation(parabola_program.get(), "view_position");
+    loc_view_size_draw_parabola =
+        glGetUniformLocation(parabola_program.get(), "view_size");
 
     samples_per_frame = 1;
     last_time = glfwGetTime();
@@ -1444,9 +1594,9 @@ void make_scene_ui(Scene &scene,
                     parabolas_changed = true;
                 if (ImGui::DragFloat("focal", &p.focal, 0.01f, 0.0f, 1000.0f))
                     parabolas_changed = true;
-                if (edit_unit_vec2("clip normal", p.clip_normal))
+                if (ImGui::DragFloat("clip x min", &p.clip_x_min, 0.01f))
                     parabolas_changed = true;
-                if (ImGui::DragFloat("clip offset", &p.clip_offset, 0.01f))
+                if (ImGui::DragFloat("clip x max", &p.clip_x_max, 0.01f))
                     parabolas_changed = true;
                 if (edit_material_id("surface_id", p.surface_id))
                     parabolas_changed = true;
@@ -1548,7 +1698,8 @@ void Application::main_loop_update()
             // world space
             clear_geometry(raster_geometry);
             push_scene_geometry(scene, thickness, raster_geometry);
-            create_vertex_and_index_data(raster_geometry);
+            create_vertex_and_index_data(
+                raster_geometry, scene.view_height, viewport.height);
             update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
         }
     }
@@ -1607,6 +1758,17 @@ void Application::main_loop_update()
         {
             l_pressed = false;
         }
+    }
+
+    // FIXME
+    if (window_state.framebuffer_size_changed)
+    {
+        window_state.framebuffer_size_changed = false;
+        clear_geometry(raster_geometry);
+        push_scene_geometry(scene, thickness, raster_geometry);
+        create_vertex_and_index_data(
+            raster_geometry, scene.view_height, viewport.height);
+        update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -1833,17 +1995,6 @@ void Application::main_loop_update()
     {
         glBindVertexArray(vao.get());
 
-        glUseProgram(circle_program.get());
-        glUniform2f(loc_view_position_draw_circle, scene.view_x, scene.view_y);
-        glUniform2f(
-            loc_view_size_draw_circle, scene.view_width, scene.view_height);
-        glDrawElements(
-            GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.circle_indices_size),
-            GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.circle_indices_offset *
-                                     sizeof(std::uint32_t)));
-
         glUseProgram(line_program.get());
         glUniform2f(loc_view_position_draw_line, scene.view_x, scene.view_y);
         glUniform2f(
@@ -1864,6 +2015,18 @@ void Application::main_loop_update()
             static_cast<GLsizei>(raster_geometry.arc_indices_size),
             GL_UNSIGNED_INT,
             reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
+                                     sizeof(std::uint32_t)));
+
+        glUseProgram(parabola_program.get());
+        glUniform2f(
+            loc_view_position_draw_parabola, scene.view_x, scene.view_y);
+        glUniform2f(
+            loc_view_size_draw_parabola, scene.view_width, scene.view_height);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(raster_geometry.parabola_indices_size),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<void *>(raster_geometry.parabola_indices_offset *
                                      sizeof(std::uint32_t)));
     }
 
