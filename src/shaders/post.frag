@@ -5,7 +5,7 @@ uniform sampler2D accumulation_texture;
 
 uniform float exposure_value;
 
-out vec4 out_color;
+out vec4 frag_color;
 
 
 // ACES tone mapping curve from Krzysztof Narkowicz
@@ -91,8 +91,8 @@ void main()
     vec4 accum = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
     vec3 color = accum.rgb / accum.a;
 #if 1
-    out_color = vec4(tone_map(color * exp2(exposure_value)), 1.0);
+    frag_color = vec4(tone_map(color * exp2(exposure_value)), 1.0);
 #else
-    out_color = vec4(sample_count_color(accum.a), 1.0);
+    frag_color = vec4(sample_count_color(accum.a), 1.0);
 #endif
 }

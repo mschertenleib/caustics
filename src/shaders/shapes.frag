@@ -1,8 +1,8 @@
 precision highp float;
 
 in vec2 local;
-in flat vec4 params;
-in flat vec3 color;
+flat in vec4 params;
+flat in vec3 color;
 
 out vec4 frag_color;
 

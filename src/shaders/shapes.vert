@@ -9,8 +9,8 @@ uniform vec2 view_position;
 uniform vec2 view_size;
 
 out vec2 local;
-out flat vec4 params;
-out flat vec3 color;
+flat out vec4 params;
+flat out vec3 color;
 
 void main()
 {

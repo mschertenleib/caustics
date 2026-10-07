@@ -1329,7 +1329,7 @@ void Application::init()
     loc_view_size = glGetUniformLocation(trace_program.get(), "view_size");
 
     post_program = create_program(
-        glsl_version, "shaders/fullscreen.vert", "shaders/post.glsl");
+        glsl_version, "shaders/fullscreen.vert", "shaders/post.frag");
     loc_exposure_value =
         glGetUniformLocation(post_program.get(), "exposure_value");
 
@@ -1868,11 +1868,11 @@ void Application::main_loop_update()
     // FIXME: we need to use this for our viewport bounds, but we need the
     // viewport in the input processing before the UI is drawn. So we need to
     // save the viewport for next frame.
-    const auto viewport_x = window_pos.x + window_size.x;
+    /*const auto viewport_x = window_pos.x + window_size.x;
     const auto viewport_y = vp->Pos.y;
     const auto viewport_width = vp->Size.x - viewport_x;
     const auto viewport_height = vp->Size.y;
-    /*std::cout << std::format("Viewport ({}, {}) ({}, {})\n",
+    std::cout << std::format("Viewport ({}, {}) ({}, {})\n",
                              viewport_x,
                              viewport_y,
                              viewport_width,

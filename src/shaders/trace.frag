@@ -656,6 +656,71 @@ float spectrum(float lambda, float c0, float c1, float c2)
     return 0.5 * x * inversesqrt(x * x + 1.0) + 0.5;
 }
 
+float gauss_dist_log(float x, float a, float b, float c)
+{
+    x = (1.0 / c) * (x - b);
+    return a - 0.5 * x * x;
+}
+
+float gtanh(float x, float a, float b, float c)
+{
+    return a / (1.0 + exp(c * (b - x)));
+}
+
+// CIE color matching functions from Thomas Puls in "Chromaticity Preserving Analytic Approximations
+// to the CIE Color Matching Functions", Journal of Computer Graphics Techniques Vol. 14, No. 1, 2025
+
+float cie_1931_cmf_sum(float wavelength)
+{
+    float x0 = gauss_dist_log(wavelength, 0.728039841, 452.53733, 20.6399874);
+    float x1 = gauss_dist_log(wavelength, -0.903768755, 436.50728, 6.80213866);
+    float x2 = gauss_dist_log(wavelength, -1.14220357, 426.696451, 5.82897816);
+    float x3 = gauss_dist_log(wavelength, 0.418410092, 567.51012, 43.4403059);
+    float x4 = gauss_dist_log(wavelength, -0.567908923, 606.986608, 25.572052);
+
+    float x_max = max(max(max(max(x0, x1), x2), x3), x4);
+    float cutoff = x_max - 36.737;
+
+    float result = 0.0;
+    if (x0 > cutoff) result += exp(x0);
+    if (x1 > cutoff) result += exp(x1);
+    if (x2 > cutoff) result += exp(x2);
+    if (x3 > cutoff) result += exp(x3);
+    if (x4 > cutoff) result += exp(x4);
+
+    return result;
+}
+
+vec3 cie_1931_chromaticity_xyz(float wavelength)
+{
+    float y = gtanh(wavelength, 1.60615643, 502.007554, 0.0967029313) +
+              gtanh(wavelength, -0.800580541, 513.882498, 0.0881332766) +
+              gtanh(wavelength, -0.550389265, 572.073576, 0.0499662324) +
+              0.00795843634;
+    float z = gtanh(wavelength, 0.878531722, 500.858724, -0.107613031) +
+              gtanh(wavelength, -0.0569332683, 470.256269, -0.0756868209);
+    return vec3(1.0 - (y + z), y, z);
+}
+
+vec3 cie_1931_cmf_xyz(float wavelength)
+{
+    vec3 xyz = cie_1931_chromaticity_xyz(wavelength);
+    float s = cie_1931_cmf_sum(wavelength);
+    return s * xyz;
+}
+
+vec3 xyz_to_rgb(vec3 xyz)
+{
+    const mat3 m = mat3(
+        3.24096994, -0.96924364, 0.05563008,
+        -1.53738318, 1.87596750, -0.20397696,
+        -0.49861076, 0.04155506, 1.05697151
+    );
+    return m * xyz;
+}
+
+
+
 void main()
 {
     uvec2 pixel = uvec2(gl_FragCoord.xy);
@@ -674,6 +739,15 @@ void main()
     // FIXME
     int segments_per_frame = samples_per_frame * 8;
 
+#if 0
+#define SPECTRAL_TEST \
+    float wl = 380.0 + random(rng_state) * 400.0; \
+    float L = 0.01 * radiance.r; \
+    radiance = xyz_to_rgb(L * 400.0 * cie_1931_cmf_xyz(wl));
+#else
+#define SPECTRAL_TEST
+#endif
+
     for (int i = 0; i < segments_per_frame; ++i)
     {
         if (!alive)
@@ -690,6 +764,7 @@ void main()
 
         if (depth >= 32)
         {
+            SPECTRAL_TEST
             accumulated_color += vec4(radiance, 1.0);
             alive = false;
             continue;
@@ -703,6 +778,7 @@ void main()
             float survival_prob = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
             if (random(rng_state) >= survival_prob)
             {
+                SPECTRAL_TEST
                 accumulated_color += vec4(radiance, 1.0);
                 alive = false;
                 continue;
@@ -719,6 +795,7 @@ void main()
         bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index, volume_mask);
         if (!is_hit)
         {
+            SPECTRAL_TEST
             accumulated_color += vec4(radiance, 1.0);
             alive = false;
             continue;
