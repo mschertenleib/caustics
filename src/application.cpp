@@ -259,11 +259,8 @@ struct Raster_geometry
     std::vector<std::uint32_t> indices;
 };
 
-struct Application
+struct Application_state
 {
-    void init();
-    void main_loop_update();
-
     Unique_handle<bool, GLFW_deleter> glfw_context {};
     Unique_handle<struct GLFWwindow *, Window_deleter> window {};
     Unique_handle<bool, ImGui_deleter> imgui_context {};
@@ -1179,7 +1176,7 @@ void create_vertex_and_index_data(Raster_geometry &geometry,
         geometry.indices.size() - geometry.parabola_indices_offset;
 }
 
-void Application::init()
+void init_application(Application_state &app)
 {
     glfwSetErrorCallback(&glfw_error_callback);
 
@@ -1187,7 +1184,7 @@ void Application::init()
     {
         throw std::runtime_error("Failed to initialize GLFW");
     }
-    glfw_context.reset(true);
+    app.glfw_context.reset(true);
 
 #ifdef __EMSCRIPTEN__
     // WebGL 2.0
@@ -1214,23 +1211,23 @@ void Application::init()
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
-    window.reset(window_ptr);
+    app.window.reset(window_ptr);
 
-    glfwMakeContextCurrent(window.get());
+    glfwMakeContextCurrent(app.window.get());
 
-    glfwSetWindowUserPointer(window.get(), &window_state);
+    glfwSetWindowUserPointer(app.window.get(), &app.window_state);
 
-    glfwSetWindowContentScaleCallback(window.get(),
+    glfwSetWindowContentScaleCallback(app.window.get(),
                                       &glfw_window_content_scale_callback);
-    glfwSetFramebufferSizeCallback(window.get(),
+    glfwSetFramebufferSizeCallback(app.window.get(),
                                    &glfw_framebuffer_size_callback);
-    glfwSetScrollCallback(window.get(), &glfw_scroll_callback);
+    glfwSetScrollCallback(app.window.get(), &glfw_scroll_callback);
 
     glfwGetWindowContentScale(
-        window.get(), &window_state.scale_x, &window_state.scale_y);
-    glfwGetFramebufferSize(window.get(),
-                           &window_state.framebuffer_width,
-                           &window_state.framebuffer_height);
+        app.window.get(), &app.window_state.scale_x, &app.window_state.scale_y);
+    glfwGetFramebufferSize(app.window.get(),
+                           &app.window_state.framebuffer_width,
+                           &app.window_state.framebuffer_height);
 
     glfwSwapInterval(1);
 
@@ -1264,7 +1261,7 @@ void Application::init()
     std::cout << "Renderer: \"" << renderer << "\"\n";
 
 #ifndef __EMSCRIPTEN__
-    auto_workload = false;
+    app.auto_workload = false;
     if (renderer.find("Mesa") != std::string_view::npos &&
         renderer.find("Intel") != std::string_view::npos)
     {
@@ -1277,137 +1274,145 @@ void Application::init()
     else
     {
         std::cout << "Enabling adaptive workload\n";
-        auto_workload = true;
+        app.auto_workload = true;
     }
 #endif
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    imgui_context.reset(true);
+    app.imgui_context.reset(true);
 
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 
-    if (!ImGui_ImplGlfw_InitForOpenGL(window.get(), true))
+    if (!ImGui_ImplGlfw_InitForOpenGL(app.window.get(), true))
     {
         throw std::runtime_error("ImGui: failed to initialize GLFW backend");
     }
-    imgui_glfw_context.reset(true);
+    app.imgui_glfw_context.reset(true);
 
 #ifdef __EMSCRIPTEN__
-    ImGui_ImplGlfw_InstallEmscriptenCallbacks(window.get(), "#canvas");
+    ImGui_ImplGlfw_InstallEmscriptenCallbacks(app.window.get(), "#canvas");
 #endif
 
     if (!ImGui_ImplOpenGL3_Init(glsl_version))
     {
         throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
     }
-    imgui_opengl_context.reset(true);
+    app.imgui_opengl_context.reset(true);
 
-    texture_width = 320;
-    texture_height = 240;
-    scene = create_scene(texture_width, texture_height);
+    app.texture_width = 320;
+    app.texture_height = 240;
+    app.scene = create_scene(app.texture_width, app.texture_height);
 
-    accumulation_texture =
-        create_accumulation_texture(texture_width, texture_height);
+    app.accumulation_texture =
+        create_accumulation_texture(app.texture_width, app.texture_height);
 
-    target_texture = create_target_texture(texture_width, texture_height);
+    app.target_texture =
+        create_target_texture(app.texture_width, app.texture_height);
 
-    trace_program = create_trace_program(glsl_version);
-    empty_vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
-    loc_num_lines = glGetUniformLocation(trace_program.get(), "num_lines");
-    loc_num_arcs = glGetUniformLocation(trace_program.get(), "num_arcs");
-    loc_num_parabolas =
-        glGetUniformLocation(trace_program.get(), "num_parabolas");
-    loc_image_size = glGetUniformLocation(trace_program.get(), "image_size");
-    loc_sample_index =
-        glGetUniformLocation(trace_program.get(), "sample_index");
-    loc_samples_per_frame =
-        glGetUniformLocation(trace_program.get(), "samples_per_frame");
-    loc_view_position =
-        glGetUniformLocation(trace_program.get(), "view_position");
-    loc_view_size = glGetUniformLocation(trace_program.get(), "view_size");
+    app.trace_program = create_trace_program(glsl_version);
+    app.empty_vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
+    app.loc_num_lines =
+        glGetUniformLocation(app.trace_program.get(), "num_lines");
+    app.loc_num_arcs =
+        glGetUniformLocation(app.trace_program.get(), "num_arcs");
+    app.loc_num_parabolas =
+        glGetUniformLocation(app.trace_program.get(), "num_parabolas");
+    app.loc_image_size =
+        glGetUniformLocation(app.trace_program.get(), "image_size");
+    app.loc_sample_index =
+        glGetUniformLocation(app.trace_program.get(), "sample_index");
+    app.loc_samples_per_frame =
+        glGetUniformLocation(app.trace_program.get(), "samples_per_frame");
+    app.loc_view_position =
+        glGetUniformLocation(app.trace_program.get(), "view_position");
+    app.loc_view_size =
+        glGetUniformLocation(app.trace_program.get(), "view_size");
 
-    post_program = create_program(
+    app.post_program = create_program(
         glsl_version, "shaders/fullscreen.vert", "shaders/post.frag");
-    loc_exposure_value =
-        glGetUniformLocation(post_program.get(), "exposure_value");
+    app.loc_exposure_value =
+        glGetUniformLocation(app.post_program.get(), "exposure_value");
 
-    glUseProgram(post_program.get());
+    glUseProgram(app.post_program.get());
     glUniform1i(
-        glGetUniformLocation(post_program.get(), "accumulation_texture"), 0);
+        glGetUniformLocation(app.post_program.get(), "accumulation_texture"),
+        0);
 
-    float_fbo = create_framebuffer(accumulation_texture.get());
+    app.float_fbo = create_framebuffer(app.accumulation_texture.get());
 
-    fbo = create_framebuffer(target_texture.get());
+    app.fbo = create_framebuffer(app.target_texture.get());
 
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 #ifndef __EMSCRIPTEN__
-    query_start = create_gl_object(glGenQueries, glDeleteQueries);
-    query_end = create_gl_object(glGenQueries, glDeleteQueries);
+    app.query_start = create_gl_object(glGenQueries, glDeleteQueries);
+    app.query_end = create_gl_object(glGenQueries, glDeleteQueries);
 #endif
 
-    surfaces_ubo = create_uniform_buffer(max_surfaces * sizeof(Surface));
-    volumes_ubo = create_uniform_buffer(max_volumes * sizeof(Volume));
-    lines_ubo = create_uniform_buffer(max_lines * sizeof(Line));
-    arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
-    parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
+    app.surfaces_ubo = create_uniform_buffer(max_surfaces * sizeof(Surface));
+    app.volumes_ubo = create_uniform_buffer(max_volumes * sizeof(Volume));
+    app.lines_ubo = create_uniform_buffer(max_lines * sizeof(Line));
+    app.arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
+    app.parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
 
-    upload_uniform_buffer(surfaces_ubo.get(), scene.surfaces);
-    upload_uniform_buffer(volumes_ubo.get(), scene.volumes);
-    upload_uniform_buffer(lines_ubo.get(), scene.lines);
-    upload_uniform_buffer(arcs_ubo.get(), scene.arcs);
-    upload_uniform_buffer(parabolas_ubo.get(), scene.parabolas);
+    upload_uniform_buffer(app.surfaces_ubo.get(), app.scene.surfaces);
+    upload_uniform_buffer(app.volumes_ubo.get(), app.scene.volumes);
+    upload_uniform_buffer(app.lines_ubo.get(), app.scene.lines);
+    upload_uniform_buffer(app.arcs_ubo.get(), app.scene.arcs);
+    upload_uniform_buffer(app.parabolas_ubo.get(), app.scene.parabolas);
 
-    const auto bind_ubo = [program = trace_program.get()](
+    const auto bind_ubo = [program = app.trace_program.get()](
                               GLuint ubo, const char *name, GLuint binding)
     {
         const auto block_index = glGetUniformBlockIndex(program, name);
         glUniformBlockBinding(program, block_index, binding);
         glBindBufferBase(GL_UNIFORM_BUFFER, binding, ubo);
     };
-    bind_ubo(surfaces_ubo.get(), "Surfaces", 1);
-    bind_ubo(volumes_ubo.get(), "Volumes", 2);
-    bind_ubo(lines_ubo.get(), "Lines", 3);
-    bind_ubo(arcs_ubo.get(), "Arcs", 4);
-    bind_ubo(parabolas_ubo.get(), "Parabolas", 5);
+    bind_ubo(app.surfaces_ubo.get(), "Surfaces", 1);
+    bind_ubo(app.volumes_ubo.get(), "Volumes", 2);
+    bind_ubo(app.lines_ubo.get(), "Lines", 3);
+    bind_ubo(app.arcs_ubo.get(), "Arcs", 4);
+    bind_ubo(app.parabolas_ubo.get(), "Parabolas", 5);
 
-    thickness = 0.005f;
-    const auto viewport = centered_viewport(texture_width,
-                                            texture_height,
-                                            window_state.framebuffer_width,
-                                            window_state.framebuffer_height);
-    push_scene_geometry(scene, thickness, raster_geometry);
+    app.thickness = 0.005f;
+    const auto viewport =
+        centered_viewport(app.texture_width,
+                          app.texture_height,
+                          app.window_state.framebuffer_width,
+                          app.window_state.framebuffer_height);
+    push_scene_geometry(app.scene, app.thickness, app.raster_geometry);
     create_vertex_and_index_data(
-        raster_geometry, scene.view_height, viewport.height);
+        app.raster_geometry, app.scene.view_height, viewport.height);
 
     // TODO: we should probably organize the raster geometry better. We need to
     // clarify the distinction between updating the vertex buffer (when
     // zooming or moving objects) and re-creating the vertex and index buffers
     // with a new size (when adding or removing objects).
-    std::tie(vao, vbo, ibo) = create_vertex_and_index_buffers(raster_geometry);
+    std::tie(app.vao, app.vbo, app.ibo) =
+        create_vertex_and_index_buffers(app.raster_geometry);
 
-    std::tie(line_program, arc_program, parabola_program) =
+    std::tie(app.line_program, app.arc_program, app.parabola_program) =
         create_shapes_programs(glsl_version);
-    loc_view_position_draw_line =
-        glGetUniformLocation(line_program.get(), "view_position");
-    loc_view_size_draw_line =
-        glGetUniformLocation(line_program.get(), "view_size");
-    loc_view_position_draw_arc =
-        glGetUniformLocation(arc_program.get(), "view_position");
-    loc_view_size_draw_arc =
-        glGetUniformLocation(arc_program.get(), "view_size");
-    loc_view_position_draw_parabola =
-        glGetUniformLocation(parabola_program.get(), "view_position");
-    loc_view_size_draw_parabola =
-        glGetUniformLocation(parabola_program.get(), "view_size");
+    app.loc_view_position_draw_line =
+        glGetUniformLocation(app.line_program.get(), "view_position");
+    app.loc_view_size_draw_line =
+        glGetUniformLocation(app.line_program.get(), "view_size");
+    app.loc_view_position_draw_arc =
+        glGetUniformLocation(app.arc_program.get(), "view_position");
+    app.loc_view_size_draw_arc =
+        glGetUniformLocation(app.arc_program.get(), "view_size");
+    app.loc_view_position_draw_parabola =
+        glGetUniformLocation(app.parabola_program.get(), "view_position");
+    app.loc_view_size_draw_parabola =
+        glGetUniformLocation(app.parabola_program.get(), "view_size");
 
-    samples_per_frame = 1;
-    last_time = glfwGetTime();
-    draw_geometry = true;
+    app.samples_per_frame = 1;
+    app.last_time = glfwGetTime();
+    app.draw_geometry = true;
 }
 
 void make_scene_ui(Scene &scene,
@@ -1615,7 +1620,7 @@ void make_scene_ui(Scene &scene,
     }
 }
 
-void Application::main_loop_update()
+void main_loop_update(Application_state &app)
 {
     // FIXME: this doesn't work with Emscripten (scroll_offset is always zero
     // after glfwPollEvents), because the callback is actually called
@@ -1625,109 +1630,116 @@ void Application::main_loop_update()
     // called synchronously or not. And note from GLFW's documentation:
     // "Do not assume that callbacks you set will _only_ be called in response
     // to event processing functions like this one [glfwPollEvents]"
-    window_state.scroll_offset = 0.0f;
+    app.window_state.scroll_offset = 0.0f;
     glfwPollEvents();
 
-    const auto viewport = centered_viewport(texture_width,
-                                            texture_height,
-                                            window_state.framebuffer_width,
-                                            window_state.framebuffer_height);
+    const auto viewport =
+        centered_viewport(app.texture_width,
+                          app.texture_height,
+                          app.window_state.framebuffer_width,
+                          app.window_state.framebuffer_height);
 
     double xpos {};
     double ypos {};
-    glfwGetCursorPos(window.get(), &xpos, &ypos);
+    glfwGetCursorPos(app.window.get(), &xpos, &ypos);
     auto mouse_world_x =
-        screen_to_world(static_cast<float>(xpos) * window_state.scale_x,
+        screen_to_world(static_cast<float>(xpos) * app.window_state.scale_x,
                         viewport.x,
                         viewport.width,
-                        scene.view_x,
-                        scene.view_width);
+                        app.scene.view_x,
+                        app.scene.view_width);
     auto mouse_world_y =
-        screen_to_world(static_cast<float>(ypos) * window_state.scale_y,
+        screen_to_world(static_cast<float>(ypos) * app.window_state.scale_y,
                         viewport.y + viewport.height,
                         -viewport.height,
-                        scene.view_y,
-                        scene.view_height);
+                        app.scene.view_y,
+                        app.scene.view_height);
 
     if (!ImGui::GetIO().WantCaptureMouse)
     {
-        if (glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
+        if (glfwGetMouseButton(app.window.get(), GLFW_MOUSE_BUTTON_LEFT) ==
             GLFW_PRESS)
         {
-            if (!dragging)
+            if (!app.dragging)
             {
-                dragging = true;
-                drag_source_mouse_x = mouse_world_x;
-                drag_source_mouse_y = mouse_world_y;
+                app.dragging = true;
+                app.drag_source_mouse_x = mouse_world_x;
+                app.drag_source_mouse_y = mouse_world_y;
             }
             else
             {
-                const auto drag_delta_x = mouse_world_x - drag_source_mouse_x;
-                const auto drag_delta_y = mouse_world_y - drag_source_mouse_y;
+                const auto drag_delta_x =
+                    mouse_world_x - app.drag_source_mouse_x;
+                const auto drag_delta_y =
+                    mouse_world_y - app.drag_source_mouse_y;
                 if (drag_delta_x != 0.0f || drag_delta_y != 0.0f)
                 {
-                    scene.view_x -= drag_delta_x;
-                    scene.view_y -= drag_delta_y;
-                    mouse_world_x = drag_source_mouse_x;
-                    mouse_world_y = drag_source_mouse_y;
-                    sample_index = 0;
+                    app.scene.view_x -= drag_delta_x;
+                    app.scene.view_y -= drag_delta_y;
+                    mouse_world_x = app.drag_source_mouse_x;
+                    mouse_world_y = app.drag_source_mouse_y;
+                    app.sample_index = 0;
                 }
             }
         }
         else
         {
-            dragging = false;
+            app.dragging = false;
         }
 
-        if (window_state.scroll_offset != 0.0f)
+        if (app.window_state.scroll_offset != 0.0f)
         {
             constexpr float zoom_factor {1.2f};
-            const auto zoom = window_state.scroll_offset > 0.0f
+            const auto zoom = app.window_state.scroll_offset > 0.0f
                                   ? 1.0f / zoom_factor
                                   : zoom_factor;
-            scene.view_x =
-                mouse_world_x - (mouse_world_x - scene.view_x) * zoom;
-            scene.view_y =
-                mouse_world_y - (mouse_world_y - scene.view_y) * zoom;
-            scene.view_width *= zoom;
-            scene.view_height *= zoom;
-            sample_index = 0;
+            app.scene.view_x =
+                mouse_world_x - (mouse_world_x - app.scene.view_x) * zoom;
+            app.scene.view_y =
+                mouse_world_y - (mouse_world_y - app.scene.view_y) * zoom;
+            app.scene.view_width *= zoom;
+            app.scene.view_height *= zoom;
+            app.sample_index = 0;
 
             // NOTE: we update the geometry when scrolling because the
             // thickness is constant in view space and therefore changes in
             // world space
-            clear_geometry(raster_geometry);
-            push_scene_geometry(scene, thickness, raster_geometry);
+            clear_geometry(app.raster_geometry);
+            push_scene_geometry(app.scene, app.thickness, app.raster_geometry);
             create_vertex_and_index_data(
-                raster_geometry, scene.view_height, viewport.height);
-            update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
+                app.raster_geometry, app.scene.view_height, viewport.height);
+            update_vertex_buffer(
+                app.vao.get(), app.vbo.get(), app.raster_geometry);
         }
     }
 
     if (!ImGui::GetIO().WantCaptureKeyboard)
     {
-        if (glfwGetKey(window.get(), GLFW_KEY_R) == GLFW_PRESS)
+        if (glfwGetKey(app.window.get(), GLFW_KEY_R) == GLFW_PRESS)
         {
-            sample_index = 0;
+            app.sample_index = 0;
         }
 
-        if (const auto p_state = glfwGetKey(window.get(), GLFW_KEY_P);
-            p_state == GLFW_PRESS && !p_pressed)
+        if (const auto p_state = glfwGetKey(app.window.get(), GLFW_KEY_P);
+            p_state == GLFW_PRESS && !app.p_pressed)
         {
-            p_pressed = true;
-            save_as_png("image.png", texture_width, texture_height, fbo.get());
+            app.p_pressed = true;
+            save_as_png("image.png",
+                        app.texture_width,
+                        app.texture_height,
+                        app.fbo.get());
         }
         else if (p_state == GLFW_RELEASE)
         {
-            p_pressed = false;
+            app.p_pressed = false;
         }
 
-        if (const auto s_state = glfwGetKey(window.get(), GLFW_KEY_S);
-            s_state == GLFW_PRESS && !s_pressed)
+        if (const auto s_state = glfwGetKey(app.window.get(), GLFW_KEY_S);
+            s_state == GLFW_PRESS && !app.s_pressed)
         {
-            s_pressed = true;
+            app.s_pressed = true;
             std::cout << "Saving scene to \"scene.json\"\n";
-            if (const auto result = save_scene(scene, "scene.json");
+            if (const auto result = save_scene(app.scene, "scene.json");
                 !result.has_value())
             {
                 std::cerr << result.error() << '\n';
@@ -1735,13 +1747,13 @@ void Application::main_loop_update()
         }
         else if (s_state == GLFW_RELEASE)
         {
-            s_pressed = false;
+            app.s_pressed = false;
         }
 
-        if (const auto l_state = glfwGetKey(window.get(), GLFW_KEY_L);
-            l_state == GLFW_PRESS && !l_pressed)
+        if (const auto l_state = glfwGetKey(app.window.get(), GLFW_KEY_L);
+            l_state == GLFW_PRESS && !app.l_pressed)
         {
-            l_pressed = true;
+            app.l_pressed = true;
             std::cout << "Loading scene from \"scene.json\"\n";
             if (const auto new_scene = load_scene("scene.json");
                 new_scene.has_value())
@@ -1756,19 +1768,19 @@ void Application::main_loop_update()
         }
         else if (l_state == GLFW_RELEASE)
         {
-            l_pressed = false;
+            app.l_pressed = false;
         }
     }
 
     // FIXME
-    if (window_state.framebuffer_size_changed)
+    if (app.window_state.framebuffer_size_changed)
     {
-        window_state.framebuffer_size_changed = false;
-        clear_geometry(raster_geometry);
-        push_scene_geometry(scene, thickness, raster_geometry);
+        app.window_state.framebuffer_size_changed = false;
+        clear_geometry(app.raster_geometry);
+        push_scene_geometry(app.scene, app.thickness, app.raster_geometry);
         create_vertex_and_index_data(
-            raster_geometry, scene.view_height, viewport.height);
-        update_vertex_buffer(vao.get(), vbo.get(), raster_geometry);
+            app.raster_geometry, app.scene.view_height, viewport.height);
+        update_vertex_buffer(app.vao.get(), app.vbo.get(), app.raster_geometry);
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -1796,8 +1808,8 @@ void Application::main_loop_update()
         ImGui::Text("%.3f ms/frame (%.2f fps)",
                     static_cast<double>(1000.0f / ImGui::GetIO().Framerate),
                     static_cast<double>(ImGui::GetIO().Framerate));
-        ImGui::Text("%u samples/frame", samples_per_frame);
-        ImGui::Text("%u samples", sample_index);
+        ImGui::Text("%u samples/frame", app.samples_per_frame);
+        ImGui::Text("%u samples", app.sample_index);
 
         ImGui::SeparatorText("Render");
 
@@ -1819,36 +1831,36 @@ void Application::main_loop_update()
         ImGui::SetNextItemWidth(80.0f);
         if (ImGui::InputScalar("Samples",
                                ImGuiDataType_U32,
-                               &max_samples,
+                               &app.max_samples,
                                nullptr,
                                nullptr,
                                "%u"))
-            max_samples = std::clamp(max_samples, 1u, 500'000u);
+            app.max_samples = std::clamp(app.max_samples, 1u, 500'000u);
 
         ImGui::SeparatorText("View");
 
         ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputFloat("X", &scene.view_x, 0.0f, 0.0f, "%.5g");
+        ImGui::InputFloat("X", &app.scene.view_x, 0.0f, 0.0f, "%.5g");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputFloat("Y", &scene.view_y, 0.0f, 0.0f, "%.5g");
+        ImGui::InputFloat("Y", &app.scene.view_y, 0.0f, 0.0f, "%.5g");
 
         ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputFloat("Width", &scene.view_width, 0.0f, 0.0f, "%.5g");
+        ImGui::InputFloat("Width", &app.scene.view_width, 0.0f, 0.0f, "%.5g");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100.0f);
-        ImGui::InputFloat("Height", &scene.view_height, 0.0f, 0.0f, "%.5g");
+        ImGui::InputFloat("Height", &app.scene.view_height, 0.0f, 0.0f, "%.5g");
 
         ImGui::SeparatorText("Post");
 
         ImGui::SetNextItemWidth(200.0f);
         do_post_process = ImGui::SliderFloat(
-            "Exposure", &exposure_value, -10.0f, 10.0f, "%.1f");
-        ImGui::Checkbox("Draw geometry", &draw_geometry);
+            "Exposure", &app.exposure_value, -10.0f, 10.0f, "%.1f");
+        ImGui::Checkbox("Draw geometry", &app.draw_geometry);
 
         ImGui::SeparatorText("Scene");
 
-        make_scene_ui(scene,
+        make_scene_ui(app.scene,
                       surfaces_changed,
                       volumes_changed,
                       lines_changed,
@@ -1883,59 +1895,60 @@ void Application::main_loop_update()
     if (surfaces_changed || volumes_changed || lines_changed || arcs_changed ||
         parabolas_changed)
     {
-        sample_index = 0;
+        app.sample_index = 0;
     }
 
 #ifndef __EMSCRIPTEN__
-    if (auto_workload)
+    if (app.auto_workload)
     {
-        glQueryCounter(query_start.get(), GL_TIMESTAMP);
+        glQueryCounter(app.query_start.get(), GL_TIMESTAMP);
     }
 #endif
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    const auto do_render = sample_index < max_samples;
+    const auto do_render = app.sample_index < app.max_samples;
     do_post_process = do_post_process || do_render;
 
     if (do_render)
     {
         if (surfaces_changed)
-            upload_uniform_buffer(surfaces_ubo.get(), scene.surfaces);
+            upload_uniform_buffer(app.surfaces_ubo.get(), app.scene.surfaces);
         if (volumes_changed)
-            upload_uniform_buffer(volumes_ubo.get(), scene.volumes);
+            upload_uniform_buffer(app.volumes_ubo.get(), app.scene.volumes);
         if (lines_changed)
-            upload_uniform_buffer(lines_ubo.get(), scene.lines);
+            upload_uniform_buffer(app.lines_ubo.get(), app.scene.lines);
         if (arcs_changed)
-            upload_uniform_buffer(arcs_ubo.get(), scene.arcs);
+            upload_uniform_buffer(app.arcs_ubo.get(), app.scene.arcs);
         if (parabolas_changed)
-            upload_uniform_buffer(parabolas_ubo.get(), scene.parabolas);
-
-        // FIXME: missing BVH update/rebuild
+            upload_uniform_buffer(app.parabolas_ubo.get(), app.scene.parabolas);
 
         const auto samples_this_frame =
-            std::min(samples_per_frame, max_samples - sample_index);
-        glUseProgram(trace_program.get());
+            std::min(app.samples_per_frame, app.max_samples - app.sample_index);
+        glUseProgram(app.trace_program.get());
 
-        glUniform1ui(loc_num_lines, static_cast<GLuint>(scene.lines.size()));
-        glUniform1ui(loc_num_arcs, static_cast<GLuint>(scene.arcs.size()));
-        glUniform1ui(loc_num_parabolas,
-                     static_cast<GLuint>(scene.parabolas.size()));
-        glUniform1i(loc_sample_index, static_cast<GLint>(sample_index));
-        glUniform1i(loc_samples_per_frame,
+        glUniform1ui(app.loc_num_lines,
+                     static_cast<GLuint>(app.scene.lines.size()));
+        glUniform1ui(app.loc_num_arcs,
+                     static_cast<GLuint>(app.scene.arcs.size()));
+        glUniform1ui(app.loc_num_parabolas,
+                     static_cast<GLuint>(app.scene.parabolas.size()));
+        glUniform1i(app.loc_sample_index, static_cast<GLint>(app.sample_index));
+        glUniform1i(app.loc_samples_per_frame,
                     static_cast<GLint>(samples_this_frame));
-        glUniform2f(loc_view_position, scene.view_x, scene.view_y);
-        glUniform2f(loc_view_size, scene.view_width, scene.view_height);
+        glUniform2f(app.loc_view_position, app.scene.view_x, app.scene.view_y);
+        glUniform2f(
+            app.loc_view_size, app.scene.view_width, app.scene.view_height);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, float_fbo.get());
-        glUniform2ui(loc_image_size,
-                     static_cast<GLuint>(texture_width),
-                     static_cast<GLuint>(texture_height));
-        glBindVertexArray(empty_vao.get());
+        glBindFramebuffer(GL_FRAMEBUFFER, app.float_fbo.get());
+        glUniform2ui(app.loc_image_size,
+                     static_cast<GLuint>(app.texture_width),
+                     static_cast<GLuint>(app.texture_height));
+        glBindVertexArray(app.empty_vao.get());
 
         // FIXME
-        if (sample_index == 0)
+        if (app.sample_index == 0)
         {
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -1949,35 +1962,35 @@ void Application::main_loop_update()
         glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);*/
         glBlendFunc(GL_ONE, GL_ONE);
 
-        glViewport(0, 0, texture_width, texture_height);
+        glViewport(0, 0, app.texture_width, app.texture_height);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        sample_index += samples_this_frame;
-        sum_samples += samples_this_frame;
+        app.sample_index += samples_this_frame;
+        app.sum_samples += samples_this_frame;
     }
 
     if (do_post_process)
     {
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo.get());
+        glBindFramebuffer(GL_FRAMEBUFFER, app.fbo.get());
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, accumulation_texture.get());
-        glUseProgram(post_program.get());
-        glUniform1f(loc_exposure_value, exposure_value);
-        glBindVertexArray(empty_vao.get());
-        glViewport(0, 0, texture_width, texture_height);
+        glBindTexture(GL_TEXTURE_2D, app.accumulation_texture.get());
+        glUseProgram(app.post_program.get());
+        glUniform1f(app.loc_exposure_value, app.exposure_value);
+        glBindVertexArray(app.empty_vao.get());
+        glViewport(0, 0, app.texture_width, app.texture_height);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
     glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo.get());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, app.fbo.get());
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glBlitFramebuffer(0,
                       0,
-                      texture_width,
-                      texture_height,
+                      app.texture_width,
+                      app.texture_height,
                       viewport.x,
                       viewport.y,
                       viewport.x + viewport.width,
@@ -1986,54 +1999,57 @@ void Application::main_loop_update()
                       GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    constexpr bool draw_bvh {true};
-    if (draw_bvh)
+    if (app.draw_geometry)
     {
-    }
+        glBindVertexArray(app.vao.get());
 
-    if (draw_geometry)
-    {
-        glBindVertexArray(vao.get());
-
-        glUseProgram(line_program.get());
-        glUniform2f(loc_view_position_draw_line, scene.view_x, scene.view_y);
-        glUniform2f(
-            loc_view_size_draw_line, scene.view_width, scene.view_height);
+        glUseProgram(app.line_program.get());
+        glUniform2f(app.loc_view_position_draw_line,
+                    app.scene.view_x,
+                    app.scene.view_y);
+        glUniform2f(app.loc_view_size_draw_line,
+                    app.scene.view_width,
+                    app.scene.view_height);
         glDrawElements(
             GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.line_indices_size),
+            static_cast<GLsizei>(app.raster_geometry.line_indices_size),
             GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.line_indices_offset *
+            reinterpret_cast<void *>(app.raster_geometry.line_indices_offset *
                                      sizeof(std::uint32_t)));
 
-        glUseProgram(arc_program.get());
-        glUniform2f(loc_view_position_draw_arc, scene.view_x, scene.view_y);
+        glUseProgram(app.arc_program.get());
         glUniform2f(
-            loc_view_size_draw_arc, scene.view_width, scene.view_height);
+            app.loc_view_position_draw_arc, app.scene.view_x, app.scene.view_y);
+        glUniform2f(app.loc_view_size_draw_arc,
+                    app.scene.view_width,
+                    app.scene.view_height);
         glDrawElements(
             GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.arc_indices_size),
+            static_cast<GLsizei>(app.raster_geometry.arc_indices_size),
             GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.arc_indices_offset *
+            reinterpret_cast<void *>(app.raster_geometry.arc_indices_offset *
                                      sizeof(std::uint32_t)));
 
-        glUseProgram(parabola_program.get());
-        glUniform2f(
-            loc_view_position_draw_parabola, scene.view_x, scene.view_y);
-        glUniform2f(
-            loc_view_size_draw_parabola, scene.view_width, scene.view_height);
+        glUseProgram(app.parabola_program.get());
+        glUniform2f(app.loc_view_position_draw_parabola,
+                    app.scene.view_x,
+                    app.scene.view_y);
+        glUniform2f(app.loc_view_size_draw_parabola,
+                    app.scene.view_width,
+                    app.scene.view_height);
         glDrawElements(
             GL_TRIANGLES,
-            static_cast<GLsizei>(raster_geometry.parabola_indices_size),
+            static_cast<GLsizei>(app.raster_geometry.parabola_indices_size),
             GL_UNSIGNED_INT,
-            reinterpret_cast<void *>(raster_geometry.parabola_indices_offset *
-                                     sizeof(std::uint32_t)));
+            reinterpret_cast<void *>(
+                app.raster_geometry.parabola_indices_offset *
+                sizeof(std::uint32_t)));
     }
 
 #ifndef __EMSCRIPTEN__
-    if (auto_workload)
+    if (app.auto_workload)
     {
-        glQueryCounter(query_end.get(), GL_TIMESTAMP);
+        glQueryCounter(app.query_end.get(), GL_TIMESTAMP);
     }
 #endif
 
@@ -2043,19 +2059,20 @@ void Application::main_loop_update()
     // Emscripten vsync is done outside the main loop function. We should align
     // our native version to this behaviour.
 #ifndef __EMSCRIPTEN__
-    glfwSwapBuffers(window.get());
+    glfwSwapBuffers(app.window.get());
 #endif
 
-    ++num_frames;
+    ++app.num_frames;
     const double current_time {glfwGetTime()};
-    if (const auto elapsed = current_time - last_time; elapsed >= 1.0)
+    if (const auto elapsed = current_time - app.last_time; elapsed >= 1.0)
     {
-        std::cout << static_cast<double>(num_frames) / elapsed << " fps, "
-                  << samples_per_frame << " samples/frame, " << sum_samples
-                  << " samples/s, " << sample_index << " samples\n";
-        num_frames = 0;
-        last_time = current_time;
-        sum_samples = 0;
+        std::cout << static_cast<double>(app.num_frames) / elapsed << " fps, "
+                  << app.samples_per_frame << " samples/frame, "
+                  << app.sum_samples << " samples/s, " << app.sample_index
+                  << " samples\n";
+        app.num_frames = 0;
+        app.last_time = current_time;
+        app.sum_samples = 0;
     }
 
 #ifndef __EMSCRIPTEN__
@@ -2065,18 +2082,19 @@ void Application::main_loop_update()
     // at all. We could technically have a workaround for this specific
     // platform, but that also assumes that GL_RENDERER will always return a
     // string correctly identifying the driver (what happens on WebGL?).
-    if (auto_workload && sample_index < max_samples)
+    if (app.auto_workload && app.sample_index < app.max_samples)
     {
         GLuint64 start_time {};
         GLuint64 end_time {};
-        glGetQueryObjectui64v(query_start.get(), GL_QUERY_RESULT, &start_time);
-        glGetQueryObjectui64v(query_end.get(), GL_QUERY_RESULT, &end_time);
+        glGetQueryObjectui64v(
+            app.query_start.get(), GL_QUERY_RESULT, &start_time);
+        glGetQueryObjectui64v(app.query_end.get(), GL_QUERY_RESULT, &end_time);
         const auto elapsed = static_cast<double>(end_time - start_time) / 1e9;
         constexpr double target_compute_per_frame {0.014};
         const auto samples_per_frame_f =
-            static_cast<double>(samples_per_frame) * target_compute_per_frame /
-            elapsed;
-        samples_per_frame =
+            static_cast<double>(app.samples_per_frame) *
+            target_compute_per_frame / elapsed;
+        app.samples_per_frame =
             static_cast<unsigned int>(std::max(samples_per_frame_f, 1.0));
     }
 #endif
@@ -2094,25 +2112,26 @@ void run()
     // any object passed to the main loop callback must have static storage
     // duration.
 
-    static Application app {};
-    app.init();
+    static Application_state app {};
+    init_application(app);
 
     ImGui::GetIO().IniFilename = nullptr;
 
     emscripten_set_main_loop_arg(
-        [](void *arg) { static_cast<Application *>(arg)->main_loop_update(); },
+        [](void *arg)
+        { main_loop_update(*static_cast<Application_state *>(arg)); },
         &app,
         0,
         true);
 
 #else
 
-    Application app {};
-    app.init();
+    Application_state app {};
+    init_application(app);
 
     while (!glfwWindowShouldClose(app.window.get()))
     {
-        app.main_loop_update();
+        main_loop_update(app);
     }
 
 #endif

@@ -18,12 +18,14 @@ float distance_line(vec2 p, float height)
     return length(p);
 }
 
-// From https://iquilezles.org/articles/distfunctions/
+// Adapted from https://iquilezles.org/articles/distfunctions/
 float distance_arc(vec2 p, vec2 dir_end, float radius)
 {
     p.x = abs(p.x);
-    float k = (dir_end.y * p.x > dir_end.x * p.y) ? dot(p, dir_end) : length(p);
-    return sqrt(dot(p, p) + radius * radius - 2.0 * radius * k);
+    if (dir_end.y * p.x > dir_end.x * p.y) 
+        return length(p - radius * dir_end);
+    else
+        return abs(length(p) - radius);
 }
 
 float cbrt(float x)

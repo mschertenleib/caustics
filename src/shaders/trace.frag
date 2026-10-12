@@ -482,6 +482,20 @@ vec2 sample_diffuse(vec2 normal, inout uint rng_state)
     return cos_theta * normal + sin_theta * tangent;
 }
 
+uint lsb_index(uint u)
+{
+    uint lsb = u & -u; // keep only LSB = 1 << i = 2^i
+    float f = float(lsb);
+    uint b = floatBitsToUint(f);
+    uint e = (b >> 23u) - 127u; // exponent = log2(f) = i
+    return e;
+}
+
+
+
+
+#if 0
+
 void evaluate_surface(
     Hit hit,
     Surface surface,
@@ -640,16 +654,268 @@ bool evaluate_volume(Volume volume, float t, inout vec2 ray_origin, inout vec2 r
     return false;
 }
 
-uint lsb_index(uint u)
+
+void main()
 {
-    uint lsb = u & -u; // keep only LSB = 1 << i = 2^i
-    float f = float(lsb);
-    uint b = floatBitsToUint(f);
-    uint e = (b >> 23u) - 127u; // exponent = log2(f) = i
-    return e;
+    uvec2 pixel = uvec2(gl_FragCoord.xy);
+    uint pixel_index = pixel.y * image_size.x + pixel.x;
+    uint rng_state = hash(pixel_index) ^ hash(uint(sample_index));
+
+    bool alive = false;
+    vec2 ray_origin;
+    vec2 ray_direction;
+    vec3 radiance;
+    vec3 throughput;
+    int depth;
+
+    vec4 accumulated_color = vec4(0.0);
+
+    // FIXME
+    int segments_per_frame = samples_per_frame * 8;
+
+    for (int i = 0; i < segments_per_frame; ++i)
+    {
+        if (!alive)
+        {
+            vec2 uv = (vec2(pixel) + vec2(random(rng_state), random(rng_state))) / vec2(image_size);
+            ray_origin = view_position + (uv - 0.5) * view_size;
+            float angle = 2.0 * PI * random(rng_state);
+            ray_direction = vec2(cos(angle), sin(angle));
+            radiance = vec3(0.0);
+            throughput = vec3(1.0);
+            depth = 0;
+            alive = true;
+        }
+
+        if (depth >= 32)
+        {
+            accumulated_color += vec4(radiance, 1.0);
+            alive = false;
+            continue;
+        }
+
+        // Russian Roulette termination
+        // NOTE: this is equivalent to doing it on the previous iteration
+        // just before any "continue" and at the end of the loop body.
+        if (depth >= 4)
+        {
+            float survival_prob = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
+            if (random(rng_state) >= survival_prob)
+            {
+                accumulated_color += vec4(radiance, 1.0);
+                alive = false;
+                continue;
+            }
+            throughput /= survival_prob;
+        }
+        ++depth;
+
+        float t;
+        vec2 local;
+        uint geometry_type;
+        uint geometry_index;
+        uint volume_mask;
+        bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index, volume_mask);
+        if (!is_hit)
+        {
+            accumulated_color += vec4(radiance, 1.0);
+            alive = false;
+            continue;
+        }
+
+        Hit hit = get_hit(ray_origin, ray_direction, t, local, geometry_type, geometry_index);
+
+        if (volume_mask != 0u)
+        {
+            uint volume_id = lsb_index(volume_mask);
+            Volume volume = volumes[volume_id];
+            bool scatter = evaluate_volume(volume, t, ray_origin, ray_direction, throughput, rng_state);
+            if (scatter)
+            {
+                continue;
+            }
+        }
+        
+        if (hit.surface_id == INVALID_ID)
+        {
+            // No surface interaction, continue tracing in the same direction
+            vec2 inside_normal = dot(ray_direction, hit.normal) >= 0.0 ? hit.normal : -hit.normal;
+            ray_origin = offset_position_along_normal(hit.position, inside_normal);
+            continue;
+        }
+
+        Surface surface = surfaces[hit.surface_id];
+
+        radiance += throughput * surface.emission_color * surface.emission_strength;
+
+        float pdf;
+        bool is_delta;
+        evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, pdf, is_delta, rng_state);
+    }
+    
+    out_color = accumulated_color;
 }
 
+
+
+
+#else
+
+
+void evaluate_surface(
+    Hit hit,
+    Surface surface,
+    inout vec2 ray_origin,
+    inout vec2 ray_direction,
+    float wavelength,
+    inout float throughput,
+    out float pdf, // Actual PDF if non-delta, else branch probability
+    out bool is_delta,
+    inout uint rng_state)
+{
+    // hit.normal: object normal, defining "inside" and "outside"
+    // normal:     opposes the incoming ray
+    float cos_theta_i = dot(ray_direction, hit.normal);
+    bool is_entering = cos_theta_i < 0.0;
+    vec2 normal = is_entering ? hit.normal : -hit.normal;
+    cos_theta_i = abs(cos_theta_i);
+
+    if (surface.type == SURFACE_DIFFUSE) 
+    {
+        ray_origin = offset_position_along_normal(hit.position, normal);
+        ray_direction = sample_diffuse(normal, rng_state);
+        //throughput *= surface.base_color;
+        throughput *= 1.0;
+        pdf = max(dot(normal, ray_direction), 0.0) * 0.5;
+        is_delta = false;
+    } 
+    else if (surface.type == SURFACE_SPECULAR) 
+    {
+        ray_origin = offset_position_along_normal(hit.position, normal);
+        ray_direction = reflect(ray_direction, normal);
+        
+        //vec3 f0 = surface.base_color;
+        //float c = max(1.0 - cos_theta_i, 0.0);
+        //vec3 fresnel_reflectance = f0 + (1.0 - f0) * (c * c * c * c * c);
+        //throughput *= fresnel_reflectance;
+        throughput *= 1.0;
+        pdf = 1.0;
+        is_delta = true;
+    } 
+    else if (surface.type == SURFACE_DIELECTRIC) 
+    {
+        //float eta = is_entering ? 1.0 / surface.ior_ratio : surface.ior_ratio;
+        float ior_ratio = surface.ior_ratio + 0.4 * (wavelength - 380.0) / 400.0;
+        float eta = is_entering ? 1.0 / ior_ratio : ior_ratio;
+        float sin2_theta_t = (eta * eta) * (1.0 - cos_theta_i * cos_theta_i);
+
+        if (sin2_theta_t > 1.0) // Total internal reflection
+        {
+            ray_origin = offset_position_along_normal(hit.position, normal);
+            ray_direction = reflect(ray_direction, normal);
+            pdf = 1.0;
+            is_delta = true;
+            return;
+        }
+
+        float cos_theta_t = sqrt(1.0 - sin2_theta_t);
+        float r0 = (eta - 1.0) / (eta + 1.0);
+        float f0 = r0 * r0;
+        float cos_fresnel = is_entering ? cos_theta_i : cos_theta_t;
+        float c = max(1.0 - cos_fresnel, 0.0);
+        float fresnel_reflectance = f0 + (1.0 - f0) * c * c * c * c * c;
+
+        if (random(rng_state) < fresnel_reflectance) // Reflect
+        {
+            ray_origin = offset_position_along_normal(hit.position, normal);
+            ray_direction = reflect(ray_direction, normal);
+            pdf = fresnel_reflectance;
+            is_delta = true;
+        }
+        else // Refract
+        {
+            ray_origin = offset_position_along_normal(hit.position, -normal);
+            ray_direction = eta * ray_direction + (eta * cos_theta_i - cos_theta_t) * normal;
+            //throughput *= surface.base_color * eta;
+            throughput *= surface.base_color.r * eta;
+            pdf = 1.0 - fresnel_reflectance;
+            is_delta = true;
+        }
+    }
+}
+
+bool evaluate_volume(Volume volume, float t, inout vec2 ray_origin, inout vec2 ray_direction, float wavelength, inout float throughput, inout uint rng_state)
+{
+    //float sigma_a = volume_absorption(volume, wavelength);
+    //float sigma_s = volume_scattering(volume, wavelength);
+    float sigma_a = volume.absorption.r * (0.8 + 1.2 * (wavelength - 380.0) / 400.0);
+    float sigma_s = volume.scattering.r * (0.8 + 1.2 * (wavelength - 380.0) / 400.0);
+    float sigma_t = sigma_a + sigma_s;
+
+    if (sigma_t <= 0.0)
+    {
+        return false;
+    }
+
+    if (sigma_s <= 0.0)
+    {
+        throughput *= exp(-sigma_t * t);
+        return false;
+    }
+
+    float distance = -log(1.0 - random(rng_state)) / sigma_t;
+
+    if (distance < t)
+    {
+        ray_origin += ray_direction * distance;
+
+        float g = volume.phase_anisotropy;
+        if (g <= -1.0)
+        {
+            ray_direction = -ray_direction;
+        }
+        else if (g < 1.0)
+        {
+            float half_phi = PI * random(rng_state) - 0.5 * PI;
+            float sh = sin(half_phi);
+            float ch = cos(half_phi);
+            float a = (1.0 - g) / (1.0 + g);
+            float a_sq = a * a;
+            float ch_sq = ch * ch;
+            float sh_sq = sh * sh;
+            float denom = ch_sq + a_sq * sh_sq;
+            float cos_theta = (ch_sq - a_sq * sh_sq) / denom;
+            float sin_theta = (2.0 * a * sh * ch) / denom;
+            vec2 forward = ray_direction;
+            vec2 right = vec2(-forward.y, forward.x);
+            ray_direction = cos_theta * forward + sin_theta * right;
+        }
+
+        throughput *= sigma_s / sigma_t;
+
+        return true;
+    }
+
+    return false;
+}
+
+
 // Fit c0, c1, c2 from target RGB
+//
+// Or more intuitively define x as:
+//
+// x = 2 * m / w * ((lambda - p)² - w² / 4)
+// m: slope of the transition (0.5 crossing, where x = 0)
+// w: width of the peak/trough (distance between the two 0.5 crossings)
+// p: center of the peak/trough
+//
+// This can be converted to the efficient representation:
+//
+// x = (c0 * lambda + c1) * lambda + c2
+// c0 = 2 * m / w
+// c1 = 2 * m / w * (-2 * p)
+// c2 = 2 * m / w * (p² - w² / 4)
+//
 float spectrum(float lambda, float c0, float c1, float c2)
 {
     float x = (c0 * lambda + c1) * lambda + c2;
@@ -730,23 +996,15 @@ void main()
     bool alive = false;
     vec2 ray_origin;
     vec2 ray_direction;
-    vec3 radiance;
-    vec3 throughput;
+    float wavelength;
+    float radiance;
+    float throughput;
     int depth;
 
     vec4 accumulated_color = vec4(0.0);
 
     // FIXME
     int segments_per_frame = samples_per_frame * 8;
-
-#if 0
-#define SPECTRAL_TEST \
-    float wl = 380.0 + random(rng_state) * 400.0; \
-    float L = 0.01 * radiance.r; \
-    radiance = xyz_to_rgb(L * 400.0 * cie_1931_cmf_xyz(wl));
-#else
-#define SPECTRAL_TEST
-#endif
 
     for (int i = 0; i < segments_per_frame; ++i)
     {
@@ -756,16 +1014,16 @@ void main()
             ray_origin = view_position + (uv - 0.5) * view_size;
             float angle = 2.0 * PI * random(rng_state);
             ray_direction = vec2(cos(angle), sin(angle));
-            radiance = vec3(0.0);
-            throughput = vec3(1.0);
+            wavelength = 380.0 + random(rng_state) * 400.0;
+            radiance = 0.0;
+            throughput = 1.0;
             depth = 0;
             alive = true;
         }
 
         if (depth >= 32)
         {
-            SPECTRAL_TEST
-            accumulated_color += vec4(radiance, 1.0);
+            accumulated_color += vec4(xyz_to_rgb(400.0 * radiance * cie_1931_cmf_xyz(wavelength)), 1.0);
             alive = false;
             continue;
         }
@@ -775,11 +1033,10 @@ void main()
         // just before any "continue" and at the end of the loop body.
         if (depth >= 4)
         {
-            float survival_prob = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
+            float survival_prob = clamp(throughput, 0.05, 1.0);
             if (random(rng_state) >= survival_prob)
             {
-                SPECTRAL_TEST
-                accumulated_color += vec4(radiance, 1.0);
+                accumulated_color += vec4(xyz_to_rgb(400.0 * radiance * cie_1931_cmf_xyz(wavelength)), 1.0);
                 alive = false;
                 continue;
             }
@@ -795,8 +1052,7 @@ void main()
         bool is_hit = intersect(ray_origin, ray_direction, t, local, geometry_type, geometry_index, volume_mask);
         if (!is_hit)
         {
-            SPECTRAL_TEST
-            accumulated_color += vec4(radiance, 1.0);
+            accumulated_color += vec4(xyz_to_rgb(400.0 * radiance * cie_1931_cmf_xyz(wavelength)), 1.0);
             alive = false;
             continue;
         }
@@ -807,7 +1063,7 @@ void main()
         {
             uint volume_id = lsb_index(volume_mask);
             Volume volume = volumes[volume_id];
-            bool scatter = evaluate_volume(volume, t, ray_origin, ray_direction, throughput, rng_state);
+            bool scatter = evaluate_volume(volume, t, ray_origin, ray_direction, wavelength, throughput, rng_state);
             if (scatter)
             {
                 continue;
@@ -824,12 +1080,16 @@ void main()
 
         Surface surface = surfaces[hit.surface_id];
 
-        radiance += throughput * surface.emission_color * surface.emission_strength;
+        if (surface.emission_strength > 0.0)
+            radiance += throughput * 0.1;
 
         float pdf;
         bool is_delta;
-        evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, pdf, is_delta, rng_state);
+        evaluate_surface(hit, surface, ray_origin, ray_direction, wavelength, throughput, pdf, is_delta, rng_state);
     }
     
     out_color = accumulated_color;
 }
+
+
+#endif
