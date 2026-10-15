@@ -77,7 +77,7 @@ uniform vec2 view_position;
 uniform vec2 view_size;
 uniform uvec2 image_size;
 
-out vec4 out_color;
+out vec4 frag_color;
 
 
 
@@ -753,7 +753,7 @@ void main()
         evaluate_surface(hit, surface, ray_origin, ray_direction, throughput, pdf, is_delta, rng_state);
     }
     
-    out_color = accumulated_color;
+    frag_color = accumulated_color;
 }
 
 
@@ -1088,7 +1088,7 @@ void main()
         evaluate_surface(hit, surface, ray_origin, ray_direction, wavelength, throughput, pdf, is_delta, rng_state);
     }
     
-    out_color = accumulated_color;
+    frag_color = accumulated_color;
 }
 
 

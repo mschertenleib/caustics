@@ -46,6 +46,8 @@
 namespace
 {
 
+constexpr std::uint32_t num_paths {4096}; // FIXME
+
 constexpr std::size_t max_surfaces {256};
 constexpr std::size_t max_volumes {32};
 constexpr std::size_t max_lines {256};
@@ -59,78 +61,88 @@ static_assert(max_lines * sizeof(Line) <= max_ubo_size);
 static_assert(max_arcs * sizeof(Arc) <= max_ubo_size);
 static_assert(max_parabolas * sizeof(Parabola) <= max_ubo_size);
 
-#define ENUMERATE_GL_FUNCTIONS_COMMON(f)                                       \
-    f(PFNGLENABLEPROC, glEnable);                                              \
-    f(PFNGLCREATESHADERPROC, glCreateShader);                                  \
-    f(PFNGLDELETESHADERPROC, glDeleteShader);                                  \
-    f(PFNGLSHADERSOURCEPROC, glShaderSource);                                  \
-    f(PFNGLCOMPILESHADERPROC, glCompileShader);                                \
-    f(PFNGLGETSHADERIVPROC, glGetShaderiv);                                    \
-    f(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog);                          \
-    f(PFNGLATTACHSHADERPROC, glAttachShader);                                  \
-    f(PFNGLCREATEPROGRAMPROC, glCreateProgram);                                \
-    f(PFNGLDELETEPROGRAMPROC, glDeleteProgram);                                \
-    f(PFNGLLINKPROGRAMPROC, glLinkProgram);                                    \
-    f(PFNGLGETPROGRAMIVPROC, glGetProgramiv);                                  \
-    f(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
-    f(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
-    f(PFNGLGETUNIFORMBLOCKINDEXPROC, glGetUniformBlockIndex);                  \
-    f(PFNGLUNIFORM1IPROC, glUniform1i);                                        \
-    f(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
-    f(PFNGLUNIFORM2UIPROC, glUniform2ui);                                      \
-    f(PFNGLUNIFORM1FPROC, glUniform1f);                                        \
-    f(PFNGLUNIFORM2FPROC, glUniform2f);                                        \
-    f(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
-    f(PFNGLDELETETEXTURESPROC, glDeleteTextures);                              \
-    f(PFNGLBINDTEXTUREPROC, glBindTexture);                                    \
-    f(PFNGLTEXPARAMETERIPROC, glTexParameteri);                                \
-    f(PFNGLTEXIMAGE2DPROC, glTexImage2D);                                      \
-    f(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers);                            \
-    f(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers);                      \
-    f(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);                            \
-    f(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);                  \
-    f(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus);              \
-    f(PFNGLGENBUFFERSPROC, glGenBuffers);                                      \
-    f(PFNGLDELETEBUFFERSPROC, glDeleteBuffers);                                \
-    f(PFNGLBINDBUFFERPROC, glBindBuffer);                                      \
-    f(PFNGLBUFFERDATAPROC, glBufferData);                                      \
-    f(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);                              \
-    f(PFNGLBUFFERSUBDATAPROC, glBufferSubData);                                \
-    f(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);                            \
-    f(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);                      \
-    f(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
-    f(PFNGLUNIFORMBLOCKBINDINGPROC, glUniformBlockBinding);                    \
-    f(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);                    \
-    f(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);            \
-    f(PFNGLDRAWELEMENTSPROC, glDrawElements);                                  \
-    f(PFNGLDRAWARRAYSPROC, glDrawArrays);                                      \
-    f(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
-    f(PFNGLVIEWPORTPROC, glViewport);                                          \
-    f(PFNGLCLEARCOLORPROC, glClearColor);                                      \
-    f(PFNGLCLEARPROC, glClear);                                                \
-    f(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);                            \
-    f(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
-    f(PFNGLGETSTRINGIPROC, glGetStringi);                                      \
-    f(PFNGLFINISHPROC, glFinish);                                              \
-    f(PFNGLBLENDEQUATIONPROC, glBlendEquation);                                \
-    f(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
-    f(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
-    f(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
-    f(PFNGLGETSTRINGPROC, glGetString);                                        \
-    f(PFNGLREADPIXELSPROC, glReadPixels);
+#define ENUMERATE_GL_FUNCTIONS_COMMON(F)                                       \
+    F(PFNGLENABLEPROC, glEnable);                                              \
+    F(PFNGLDISABLEPROC, glDisable);                                            \
+    F(PFNGLCREATESHADERPROC, glCreateShader);                                  \
+    F(PFNGLDELETESHADERPROC, glDeleteShader);                                  \
+    F(PFNGLSHADERSOURCEPROC, glShaderSource);                                  \
+    F(PFNGLCOMPILESHADERPROC, glCompileShader);                                \
+    F(PFNGLGETSHADERIVPROC, glGetShaderiv);                                    \
+    F(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog);                          \
+    F(PFNGLATTACHSHADERPROC, glAttachShader);                                  \
+    F(PFNGLCREATEPROGRAMPROC, glCreateProgram);                                \
+    F(PFNGLDELETEPROGRAMPROC, glDeleteProgram);                                \
+    F(PFNGLLINKPROGRAMPROC, glLinkProgram);                                    \
+    F(PFNGLGETPROGRAMIVPROC, glGetProgramiv);                                  \
+    F(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);                        \
+    F(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);                      \
+    F(PFNGLGETUNIFORMBLOCKINDEXPROC, glGetUniformBlockIndex);                  \
+    F(PFNGLUNIFORM1IPROC, glUniform1i);                                        \
+    F(PFNGLUNIFORM1UIPROC, glUniform1ui);                                      \
+    F(PFNGLUNIFORM2UIPROC, glUniform2ui);                                      \
+    F(PFNGLUNIFORM1FPROC, glUniform1f);                                        \
+    F(PFNGLUNIFORM2FPROC, glUniform2f);                                        \
+    F(PFNGLGENTEXTURESPROC, glGenTextures);                                    \
+    F(PFNGLDELETETEXTURESPROC, glDeleteTextures);                              \
+    F(PFNGLBINDTEXTUREPROC, glBindTexture);                                    \
+    F(PFNGLTEXPARAMETERIPROC, glTexParameteri);                                \
+    F(PFNGLTEXIMAGE2DPROC, glTexImage2D);                                      \
+    F(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers);                            \
+    F(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers);                      \
+    F(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);                            \
+    F(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);                  \
+    F(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus);              \
+    F(PFNGLGENBUFFERSPROC, glGenBuffers);                                      \
+    F(PFNGLDELETEBUFFERSPROC, glDeleteBuffers);                                \
+    F(PFNGLBINDBUFFERPROC, glBindBuffer);                                      \
+    F(PFNGLBUFFERDATAPROC, glBufferData);                                      \
+    F(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);                              \
+    F(PFNGLBUFFERSUBDATAPROC, glBufferSubData);                                \
+    F(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);                            \
+    F(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);                      \
+    F(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
+    F(PFNGLUNIFORMBLOCKBINDINGPROC, glUniformBlockBinding);                    \
+    F(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);                    \
+    F(PFNGLVERTEXATTRIBDIVISORPROC, glVertexAttribDivisor);                    \
+    F(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);            \
+    F(PFNGLTRANSFORMFEEDBACKVARYINGSPROC, glTransformFeedbackVaryings);        \
+    F(PFNGLGENTRANSFORMFEEDBACKSPROC, glGenTransformFeedbacks);                \
+    F(PFNGLDELETETRANSFORMFEEDBACKSPROC, glDeleteTransformFeedbacks);          \
+    F(PFNGLBINDTRANSFORMFEEDBACKPROC, glBindTransformFeedback);                \
+    F(PFNGLBEGINTRANSFORMFEEDBACKPROC, glBeginTransformFeedback);              \
+    F(PFNGLENDTRANSFORMFEEDBACKPROC, glEndTransformFeedback);                  \
+    F(PFNGLDRAWELEMENTSPROC, glDrawElements);                                  \
+    F(PFNGLDRAWARRAYSPROC, glDrawArrays);                                      \
+    F(PFNGLDRAWARRAYSINSTANCEDPROC, glDrawArraysInstanced);                    \
+    F(PFNGLUSEPROGRAMPROC, glUseProgram);                                      \
+    F(PFNGLVIEWPORTPROC, glViewport);                                          \
+    F(PFNGLCLEARCOLORPROC, glClearColor);                                      \
+    F(PFNGLCLEARPROC, glClear);                                                \
+    F(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer);                            \
+    F(PFNGLGETINTEGERVPROC, glGetIntegerv);                                    \
+    F(PFNGLGETSTRINGIPROC, glGetStringi);                                      \
+    F(PFNGLFINISHPROC, glFinish);                                              \
+    F(PFNGLBLENDEQUATIONPROC, glBlendEquation);                                \
+    F(PFNGLBLENDFUNCPROC, glBlendFunc);                                        \
+    F(PFNGLBLENDCOLORPROC, glBlendColor);                                      \
+    F(PFNGLACTIVETEXTUREPROC, glActiveTexture);                                \
+    F(PFNGLGETSTRINGPROC, glGetString);                                        \
+    F(PFNGLREADPIXELSPROC, glReadPixels);
 
-#define ENUMERATE_GL_FUNCTIONS_430(f)                                          \
-    f(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
-    f(PFNGLGENQUERIESPROC, glGenQueries);                                      \
-    f(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
-    f(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
-    f(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);
+#define ENUMERATE_GL_FUNCTIONS_430(F)                                          \
+    F(PFNGLDEBUGMESSAGECALLBACKPROC, glDebugMessageCallback);                  \
+    F(PFNGLGENQUERIESPROC, glGenQueries);                                      \
+    F(PFNGLDELETEQUERIESPROC, glDeleteQueries);                                \
+    F(PFNGLQUERYCOUNTERPROC, glQueryCounter);                                  \
+    F(PFNGLGETQUERYOBJECTUI64VPROC, glGetQueryObjectui64v);                    \
+    F(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);
 
 #ifndef __EMSCRIPTEN__
-#define ENUMERATE_GL_FUNCTIONS(f)                                              \
-    ENUMERATE_GL_FUNCTIONS_COMMON(f) ENUMERATE_GL_FUNCTIONS_430(f)
+#define ENUMERATE_GL_FUNCTIONS(F)                                              \
+    ENUMERATE_GL_FUNCTIONS_COMMON(F) ENUMERATE_GL_FUNCTIONS_430(F)
 #else
-#define ENUMERATE_GL_FUNCTIONS(f) ENUMERATE_GL_FUNCTIONS_COMMON(f)
+#define ENUMERATE_GL_FUNCTIONS(F) ENUMERATE_GL_FUNCTIONS_COMMON(F)
 #endif
 
 // clang-format off
@@ -207,6 +219,14 @@ struct Window_state
     float scroll_offset;
 };
 
+struct Viewport
+{
+    int x;
+    int y;
+    int width;
+    int height;
+};
+
 struct Raster_line
 {
     vec2 vertex_a;
@@ -259,71 +279,94 @@ struct Raster_geometry
     std::vector<std::uint32_t> indices;
 };
 
+struct Path_record
+{
+    vec2 ray_origin;
+    vec2 ray_direction;
+    float wavelength;
+    float radiance;
+    float throughput;
+    std::uint32_t alive;
+    vec2 segment_end;
+};
+
 struct Application_state
 {
-    Unique_handle<bool, GLFW_deleter> glfw_context {};
-    Unique_handle<struct GLFWwindow *, Window_deleter> window {};
-    Unique_handle<bool, ImGui_deleter> imgui_context {};
-    Unique_handle<bool, ImGui_glfw_deleter> imgui_glfw_context {};
-    Unique_handle<bool, ImGui_opengl_deleter> imgui_opengl_context {};
-    Window_state window_state {};
-    bool auto_workload {};
-    int texture_width {};
-    int texture_height {};
-    Scene scene {};
-    Unique_handle<GLuint, GL_array_deleter> accumulation_texture {};
-    Unique_handle<GLuint, GL_array_deleter> target_texture {};
-    Unique_handle<GLuint, GL_deleter> trace_program {};
-    Unique_handle<GLuint, GL_array_deleter> empty_vao {};
-    GLint loc_num_lines {};
-    GLint loc_num_arcs {};
-    GLint loc_num_parabolas {};
-    GLint loc_image_size {};
-    GLint loc_sample_index {};
-    GLint loc_samples_per_frame {};
-    GLint loc_view_position {};
-    GLint loc_view_size {};
-    Unique_handle<GLuint, GL_deleter> post_program {};
-    GLint loc_exposure_value {};
-    float exposure_value {};
-    Unique_handle<GLuint, GL_array_deleter> float_fbo {};
-    Unique_handle<GLuint, GL_array_deleter> fbo {};
+    Unique_handle<bool, GLFW_deleter> glfw_context;
+    Unique_handle<struct GLFWwindow *, Window_deleter> window;
+    Unique_handle<bool, ImGui_deleter> imgui_context;
+    Unique_handle<bool, ImGui_glfw_deleter> imgui_glfw_context;
+    Unique_handle<bool, ImGui_opengl_deleter> imgui_opengl_context;
+    Window_state window_state; // FIXME
+    bool auto_workload;        // FIXME
+
+    // Forward tracing
+    Unique_handle<GLuint, GL_deleter> forward_trace_program;
+    Unique_handle<GLuint, GL_deleter> forward_segment_program;
+    GLint loc_view_position_segment;
+    GLint loc_view_size_segment;
+    GLint loc_viewport_size_segment;
+    Unique_handle<GLuint, GL_array_deleter> transform_feedback;
+    std::array<Unique_handle<GLuint, GL_array_deleter>, 2> tf_buffers;
+    std::array<Unique_handle<GLuint, GL_array_deleter>, 2> trace_vaos;
+    std::array<Unique_handle<GLuint, GL_array_deleter>, 2> segment_vaos;
+
+    Unique_handle<GLuint, GL_array_deleter> empty_vao;
+    Unique_handle<GLuint, GL_deleter> trace_program;
+    GLint loc_num_lines;
+    GLint loc_num_arcs;
+    GLint loc_num_parabolas;
+    GLint loc_image_size;
+    GLint loc_sample_index;
+    GLint loc_samples_per_frame;
+    GLint loc_view_position;
+    GLint loc_view_size;
+    Unique_handle<GLuint, GL_deleter> post_program;
+    GLint loc_exposure;
 #ifndef __EMSCRIPTEN__
-    Unique_handle<GLuint, GL_array_deleter> query_start {};
-    Unique_handle<GLuint, GL_array_deleter> query_end {};
+    Unique_handle<GLuint, GL_array_deleter> query_start;
+    Unique_handle<GLuint, GL_array_deleter> query_end;
 #endif
-    Unique_handle<GLuint, GL_array_deleter> surfaces_ubo {};
-    Unique_handle<GLuint, GL_array_deleter> volumes_ubo {};
-    Unique_handle<GLuint, GL_array_deleter> lines_ubo {};
-    Unique_handle<GLuint, GL_array_deleter> arcs_ubo {};
-    Unique_handle<GLuint, GL_array_deleter> parabolas_ubo {};
-    float thickness {}; // In fraction of the view height // FIXME
-    Raster_geometry raster_geometry {};
-    Unique_handle<GLuint, GL_array_deleter> vao {};
-    Unique_handle<GLuint, GL_array_deleter> vbo {};
-    Unique_handle<GLuint, GL_array_deleter> ibo {};
-    Unique_handle<GLuint, GL_deleter> parabola_program {};
-    Unique_handle<GLuint, GL_deleter> line_program {};
-    Unique_handle<GLuint, GL_deleter> arc_program {};
-    GLint loc_view_position_draw_parabola {};
-    GLint loc_view_size_draw_parabola {};
-    GLint loc_view_position_draw_line {};
-    GLint loc_view_size_draw_line {};
-    GLint loc_view_position_draw_arc {};
-    GLint loc_view_size_draw_arc {};
-    unsigned int max_samples {500'000};
-    unsigned int sample_index {};
-    unsigned int samples_per_frame {};
-    double last_time {};
-    unsigned int sum_samples {};
-    int num_frames {};
-    bool p_pressed {};
-    bool s_pressed {};
-    bool l_pressed {};
-    bool dragging {};
-    bool draw_geometry {};
-    float drag_source_mouse_x {};
-    float drag_source_mouse_y {};
+    Unique_handle<GLuint, GL_array_deleter> surfaces_ubo;
+    Unique_handle<GLuint, GL_array_deleter> volumes_ubo;
+    Unique_handle<GLuint, GL_array_deleter> lines_ubo;
+    Unique_handle<GLuint, GL_array_deleter> arcs_ubo;
+    Unique_handle<GLuint, GL_array_deleter> parabolas_ubo;
+    int texture_width;
+    int texture_height;
+    Scene scene;
+    Unique_handle<GLuint, GL_array_deleter> accumulation_texture;
+    Unique_handle<GLuint, GL_array_deleter> target_texture;
+    Unique_handle<GLuint, GL_array_deleter> float_fbo;
+    Unique_handle<GLuint, GL_array_deleter> fbo;
+    float thickness; // In fraction of the view height // FIXME
+    Raster_geometry raster_geometry;
+    Unique_handle<GLuint, GL_array_deleter> vao;
+    Unique_handle<GLuint, GL_array_deleter> vbo;
+    Unique_handle<GLuint, GL_array_deleter> ibo;
+    Unique_handle<GLuint, GL_deleter> parabola_program;
+    Unique_handle<GLuint, GL_deleter> line_program;
+    Unique_handle<GLuint, GL_deleter> arc_program;
+    GLint loc_view_position_draw_parabola;
+    GLint loc_view_size_draw_parabola;
+    GLint loc_view_position_draw_line;
+    GLint loc_view_size_draw_line;
+    GLint loc_view_position_draw_arc;
+    GLint loc_view_size_draw_arc;
+    unsigned int max_samples;
+    unsigned int sample_index;
+    unsigned int samples_per_frame;
+    double last_time;
+    unsigned int sum_samples;
+    int num_frames;
+    bool p_pressed;
+    bool s_pressed;
+    bool l_pressed;
+    bool dragging;
+    bool draw_geometry;
+    float drag_source_mouse_x;
+    float drag_source_mouse_y;
+    float exposure;
 };
 
 template <std::invocable C, std::invocable<GLuint> D>
@@ -346,14 +389,6 @@ template <std::invocable<GLsizei, GLuint *> C,
     create(1, &object);
     return Unique_handle(object, GL_array_deleter {destroy});
 }
-
-struct Viewport
-{
-    int x;
-    int y;
-    int width;
-    int height;
-};
 
 void glfw_error_callback(int error, const char *description)
 {
@@ -423,23 +458,28 @@ void APIENTRY gl_debug_callback([[maybe_unused]] GLenum source,
 }
 #endif
 
-[[nodiscard]] std::vector<const char *> get_all_extensions()
+#ifdef __EMSCRIPTEN__
+void check_required_extensions()
 {
+    constexpr auto required_extension = "GL_EXT_color_buffer_float";
+
     int num_extensions {};
     glGetIntegerv(GL_NUM_EXTENSIONS, &num_extensions);
 
-    std::vector<const char *> extensions;
-    extensions.reserve(static_cast<std::size_t>(num_extensions));
-
     for (int i {0}; i < num_extensions; ++i)
     {
-        const auto *const str =
-            glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
-        extensions.push_back(reinterpret_cast<const char *>(str));
+        const auto extension = reinterpret_cast<const char *>(
+            glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+        if (std::strcmp(extension, required_extension) == 0)
+        {
+            return;
+        }
     }
 
-    return extensions;
+    throw std::runtime_error(
+        std::format("Extension \"{}\" is not supported", required_extension));
 }
+#endif
 
 [[nodiscard]] std::string read_file(const char *file_name)
 {
@@ -733,34 +773,38 @@ create_vertex_and_index_buffers(const Raster_geometry &geometry)
         geometry.indices.data(),
         GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0,
-                          sizeof(Vertex::position) / sizeof(float),
-                          GL_FLOAT,
-                          GL_FALSE,
-                          sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, position)));
-    glVertexAttribPointer(1,
-                          sizeof(Vertex::local) / sizeof(float),
-                          GL_FLOAT,
-                          GL_FALSE,
-                          sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, local)));
-    glVertexAttribPointer(2,
-                          sizeof(Vertex::params) / sizeof(float),
-                          GL_FLOAT,
-                          GL_FALSE,
-                          sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, params)));
-    glVertexAttribPointer(3,
-                          sizeof(Vertex::color) / sizeof(float),
-                          GL_FLOAT,
-                          GL_FALSE,
-                          sizeof(Vertex),
-                          reinterpret_cast<void *>(offsetof(Vertex, color)));
     glEnableVertexAttribArray(0);
+    glVertexAttribPointer(
+        0,
+        sizeof(Vertex::position) / sizeof(float),
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<const void *>(offsetof(Vertex, position)));
     glEnableVertexAttribArray(1);
+    glVertexAttribPointer(
+        1,
+        sizeof(Vertex::local) / sizeof(float),
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<const void *>(offsetof(Vertex, local)));
     glEnableVertexAttribArray(2);
+    glVertexAttribPointer(
+        2,
+        sizeof(Vertex::params) / sizeof(float),
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<const void *>(offsetof(Vertex, params)));
     glEnableVertexAttribArray(3);
+    glVertexAttribPointer(
+        3,
+        sizeof(Vertex::color) / sizeof(float),
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<const void *>(offsetof(Vertex, color)));
 
     glBindVertexArray(0);
 
@@ -785,11 +829,7 @@ void update_vertex_buffer(GLuint vao,
 
 [[nodiscard]] auto create_uniform_buffer(std::size_t size)
 {
-    if (size > max_ubo_size)
-    {
-        throw std::runtime_error(std::format(
-            "Uniform buffer too big ({}B > {}B)", size, max_ubo_size));
-    }
+    assert(size <= max_ubo_size);
 
     auto ubo = create_gl_object(glGenBuffers, glDeleteBuffers);
 
@@ -823,6 +863,195 @@ void upload_uniform_buffer(GLuint ubo, const std::vector<T> &data)
                     static_cast<GLsizeiptr>(data.size() * sizeof(T)),
                     data.data());
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+[[nodiscard]] auto create_forward_trace_program(const char *glsl_version)
+{
+    const auto vertex_shader_code = read_file("shaders/forward.vert");
+    const auto header = std::format("{}\n"
+                                    "#define MAX_SURFACES {}u\n"
+                                    "#define MAX_VOLUMES {}u\n"
+                                    "#define MAX_LINES {}u\n"
+                                    "#define MAX_ARCS {}u\n"
+                                    "#define MAX_PARABOLAS {}u\n",
+                                    glsl_version,
+                                    max_surfaces,
+                                    max_volumes,
+                                    max_lines,
+                                    max_arcs,
+                                    max_parabolas);
+    const char *const vertex_shader_sources[] {header.c_str(),
+                                               vertex_shader_code.c_str()};
+    const auto vertex_shader = create_shader(GL_VERTEX_SHADER,
+                                             std::size(vertex_shader_sources),
+                                             vertex_shader_sources);
+
+    constexpr auto fragment_shader_code = R"(
+precision highp float;
+
+out vec4 frag_color;
+
+void main() {
+    frag_color = vec4(0.0);
+})";
+    const char *const fragment_shader_sources[] {glsl_version,
+                                                 fragment_shader_code};
+    const auto fragment_shader =
+        create_shader(GL_FRAGMENT_SHADER,
+                      std::size(fragment_shader_sources),
+                      fragment_shader_sources);
+
+    // FIXME: code duplication
+
+    auto program = create_gl_object(glCreateProgram, glDeleteProgram);
+
+    glAttachShader(program.get(), vertex_shader.get());
+    glAttachShader(program.get(), fragment_shader.get());
+
+    constexpr const char *varyings[] {"out_ray_origin",
+                                      "out_ray_direction",
+                                      "out_wavelength",
+                                      "out_radiance",
+                                      "out_throughput",
+                                      "out_alive",
+                                      "out_segment_end"};
+    glTransformFeedbackVaryings(
+        program.get(), std::size(varyings), varyings, GL_INTERLEAVED_ATTRIBS);
+
+    glLinkProgram(program.get());
+
+    int success {};
+    glGetProgramiv(program.get(), GL_LINK_STATUS, &success);
+    if (!success)
+    {
+        int buf_length {};
+        glGetProgramiv(program.get(), GL_INFO_LOG_LENGTH, &buf_length);
+        std::string message(static_cast<std::size_t>(buf_length), '\0');
+        glGetProgramInfoLog(program.get(), buf_length, nullptr, message.data());
+        throw std::runtime_error(
+            std::format("Program linking failed:\n{}\n", message));
+    }
+
+    return program;
+}
+
+[[nodiscard]] auto create_forward_trace_resources(std::uint32_t num_paths)
+{
+    std::array tf_buffers {create_gl_object(glGenBuffers, glDeleteBuffers),
+                           create_gl_object(glGenBuffers, glDeleteBuffers)};
+
+    {
+        // We just initially need alive=false and well-defined default values
+        std::vector<Path_record> initial_records(num_paths);
+
+        const auto buffer_size =
+            static_cast<GLsizeiptr>(num_paths * sizeof(Path_record));
+
+        glBindBuffer(GL_ARRAY_BUFFER, tf_buffers[0].get());
+        glBufferData(GL_ARRAY_BUFFER,
+                     buffer_size,
+                     initial_records.data(),
+                     GL_DYNAMIC_COPY);
+
+        glBindBuffer(GL_ARRAY_BUFFER, tf_buffers[1].get());
+        glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_COPY);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    std::array trace_vaos {
+        create_gl_object(glGenVertexArrays, glDeleteVertexArrays),
+        create_gl_object(glGenVertexArrays, glDeleteVertexArrays)};
+    std::array segment_vaos {
+        create_gl_object(glGenVertexArrays, glDeleteVertexArrays),
+        create_gl_object(glGenVertexArrays, glDeleteVertexArrays)};
+
+    for (std::size_t i {0}; i < 2; ++i)
+    {
+        glBindVertexArray(trace_vaos[i].get());
+        glBindBuffer(GL_ARRAY_BUFFER, tf_buffers[i].get());
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, ray_origin)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1,
+                              2,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(Path_record),
+                              reinterpret_cast<const void *>(
+                                  offsetof(Path_record, ray_direction)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(
+            2,
+            1,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, wavelength)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(
+            3,
+            1,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, radiance)));
+        glEnableVertexAttribArray(4);
+        glVertexAttribPointer(
+            4,
+            1,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, throughput)));
+        glEnableVertexAttribArray(5);
+        glVertexAttribPointer(
+            5,
+            1,
+            GL_UNSIGNED_INT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, alive)));
+    }
+
+    for (std::size_t i {0}; i < 2; ++i)
+    {
+        glBindVertexArray(segment_vaos[i].get());
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, ray_origin)));
+        glVertexAttribDivisor(0, 1); // Advance per instance
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, segment_end)));
+        glVertexAttribDivisor(1, 1); // Advance per instance
+    }
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    // FIXME
+    return std::tuple {
+        std::move(tf_buffers), std::move(trace_vaos), std::move(segment_vaos)};
 }
 
 #ifdef __EMSCRIPTEN__
@@ -1180,11 +1409,11 @@ void init_application(Application_state &app)
 {
     glfwSetErrorCallback(&glfw_error_callback);
 
-    if (!glfwInit())
+    app.glfw_context.reset(glfwInit());
+    if (!app.glfw_context.has_value())
     {
         throw std::runtime_error("Failed to initialize GLFW");
     }
-    app.glfw_context.reset(true);
 
 #ifdef __EMSCRIPTEN__
     // WebGL 2.0
@@ -1199,22 +1428,19 @@ void init_application(Application_state &app)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#ifndef NDEBUG
     glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
+#endif
 #endif
     glfwWindowHint(GLFW_SAMPLES, 0);
 
-    auto *const window_ptr =
-        glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr);
-    if (window_ptr == nullptr)
+    app.window.reset(glfwCreateWindow(1280, 720, "Caustics", nullptr, nullptr));
+    if (!app.window.has_value())
     {
-        // FIXME ???
-        glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
-    app.window.reset(window_ptr);
 
     glfwMakeContextCurrent(app.window.get());
-
     glfwSetWindowUserPointer(app.window.get(), &app.window_state);
 
     glfwSetWindowContentScaleCallback(app.window.get(),
@@ -1231,30 +1457,42 @@ void init_application(Application_state &app)
 
     glfwSwapInterval(1);
 
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    app.imgui_context.reset(true);
+
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::StyleColorsDark();
+
+    app.imgui_glfw_context.reset(
+        ImGui_ImplGlfw_InitForOpenGL(app.window.get(), true));
+    if (!app.imgui_glfw_context.has_value())
+    {
+        throw std::runtime_error("ImGui: failed to initialize GLFW backend");
+    }
+
+#ifdef __EMSCRIPTEN__
+    ImGui_ImplGlfw_InstallEmscriptenCallbacks(app.window.get(), "#canvas");
+#endif
+
+    app.imgui_opengl_context.reset(ImGui_ImplOpenGL3_Init(glsl_version));
+    if (!app.imgui_opengl_context.has_value())
+    {
+        throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
+    }
+
     load_gl_functions();
 
 #ifdef __EMSCRIPTEN__
-    constexpr const char *required_extensions[] {"GL_EXT_color_buffer_float"};
-    const auto supported_extensions = get_all_extensions();
-    for (const char *const required_extension : required_extensions)
-    {
-        if (std::none_of(
-                supported_extensions.cbegin(),
-                supported_extensions.cend(),
-                [required_extension](const char *extension)
-                { return std::strcmp(extension, required_extension) == 0; }))
-        {
-            std::ostringstream message;
-            message << "Extension " << required_extension
-                    << " is not supported ";
-            throw std::runtime_error(message.str());
-        }
-    }
-#else
+    check_required_extensions();
+#elifndef NDEBUG
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     glDebugMessageCallback(&gl_debug_callback, nullptr);
 #endif
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     const std::string_view renderer(
         reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
@@ -1278,41 +1516,8 @@ void init_application(Application_state &app)
     }
 #endif
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    app.imgui_context.reset(true);
-
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ImGui::StyleColorsDark();
-
-    if (!ImGui_ImplGlfw_InitForOpenGL(app.window.get(), true))
-    {
-        throw std::runtime_error("ImGui: failed to initialize GLFW backend");
-    }
-    app.imgui_glfw_context.reset(true);
-
-#ifdef __EMSCRIPTEN__
-    ImGui_ImplGlfw_InstallEmscriptenCallbacks(app.window.get(), "#canvas");
-#endif
-
-    if (!ImGui_ImplOpenGL3_Init(glsl_version))
-    {
-        throw std::runtime_error("ImGui: failed to initialize OpenGL backend");
-    }
-    app.imgui_opengl_context.reset(true);
-
-    app.texture_width = 320;
-    app.texture_height = 240;
-    app.scene = create_scene(app.texture_width, app.texture_height);
-
-    app.accumulation_texture =
-        create_accumulation_texture(app.texture_width, app.texture_height);
-
-    app.target_texture =
-        create_target_texture(app.texture_width, app.texture_height);
-
-    app.trace_program = create_trace_program(glsl_version);
     app.empty_vao = create_gl_object(glGenVertexArrays, glDeleteVertexArrays);
+    app.trace_program = create_trace_program(glsl_version);
     app.loc_num_lines =
         glGetUniformLocation(app.trace_program.get(), "num_lines");
     app.loc_num_arcs =
@@ -1329,24 +1534,13 @@ void init_application(Application_state &app)
         glGetUniformLocation(app.trace_program.get(), "view_position");
     app.loc_view_size =
         glGetUniformLocation(app.trace_program.get(), "view_size");
-
     app.post_program = create_program(
         glsl_version, "shaders/fullscreen.vert", "shaders/post.frag");
-    app.loc_exposure_value =
-        glGetUniformLocation(app.post_program.get(), "exposure_value");
-
+    app.loc_exposure = glGetUniformLocation(app.post_program.get(), "exposure");
     glUseProgram(app.post_program.get());
     glUniform1i(
         glGetUniformLocation(app.post_program.get(), "accumulation_texture"),
         0);
-
-    app.float_fbo = create_framebuffer(app.accumulation_texture.get());
-
-    app.fbo = create_framebuffer(app.target_texture.get());
-
-    glEnable(GL_BLEND);
-    glBlendEquation(GL_FUNC_ADD);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 #ifndef __EMSCRIPTEN__
     app.query_start = create_gl_object(glGenQueries, glDeleteQueries);
@@ -1358,12 +1552,6 @@ void init_application(Application_state &app)
     app.lines_ubo = create_uniform_buffer(max_lines * sizeof(Line));
     app.arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
     app.parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
-
-    upload_uniform_buffer(app.surfaces_ubo.get(), app.scene.surfaces);
-    upload_uniform_buffer(app.volumes_ubo.get(), app.scene.volumes);
-    upload_uniform_buffer(app.lines_ubo.get(), app.scene.lines);
-    upload_uniform_buffer(app.arcs_ubo.get(), app.scene.arcs);
-    upload_uniform_buffer(app.parabolas_ubo.get(), app.scene.parabolas);
 
     const auto bind_ubo = [program = app.trace_program.get()](
                               GLuint ubo, const char *name, GLuint binding)
@@ -1377,6 +1565,38 @@ void init_application(Application_state &app)
     bind_ubo(app.lines_ubo.get(), "Lines", 3);
     bind_ubo(app.arcs_ubo.get(), "Arcs", 4);
     bind_ubo(app.parabolas_ubo.get(), "Parabolas", 5);
+
+    app.forward_trace_program = create_forward_trace_program(glsl_version);
+    app.forward_segment_program =
+        create_program(glsl_version,
+                       "shaders/forward_rasterize.vert",
+                       "shaders/forward_rasterize.frag");
+    app.loc_view_position_segment = glGetUniformLocation(
+        app.forward_segment_program.get(), "view_position");
+    app.loc_view_size_segment =
+        glGetUniformLocation(app.forward_segment_program.get(), "view_size");
+    app.loc_viewport_size_segment = glGetUniformLocation(
+        app.forward_segment_program.get(), "viewport_size");
+    app.transform_feedback =
+        create_gl_object(glGenTransformFeedbacks, glDeleteTransformFeedbacks);
+    std::tie(app.tf_buffers, app.trace_vaos, app.segment_vaos) =
+        create_forward_trace_resources(num_paths);
+
+    app.texture_width = 320;
+    app.texture_height = 240;
+    app.scene = create_scene(app.texture_width, app.texture_height);
+    app.accumulation_texture =
+        create_accumulation_texture(app.texture_width, app.texture_height);
+    app.target_texture =
+        create_target_texture(app.texture_width, app.texture_height);
+    app.float_fbo = create_framebuffer(app.accumulation_texture.get());
+    app.fbo = create_framebuffer(app.target_texture.get());
+
+    upload_uniform_buffer(app.surfaces_ubo.get(), app.scene.surfaces);
+    upload_uniform_buffer(app.volumes_ubo.get(), app.scene.volumes);
+    upload_uniform_buffer(app.lines_ubo.get(), app.scene.lines);
+    upload_uniform_buffer(app.arcs_ubo.get(), app.scene.arcs);
+    upload_uniform_buffer(app.parabolas_ubo.get(), app.scene.parabolas);
 
     app.thickness = 0.005f;
     const auto viewport =
@@ -1413,6 +1633,7 @@ void init_application(Application_state &app)
     app.samples_per_frame = 1;
     app.last_time = glfwGetTime();
     app.draw_geometry = true;
+    app.max_samples = 500'000;
 }
 
 void make_scene_ui(Scene &scene,
@@ -1855,7 +2076,7 @@ void main_loop_update(Application_state &app)
 
         ImGui::SetNextItemWidth(200.0f);
         do_post_process = ImGui::SliderFloat(
-            "Exposure", &app.exposure_value, -10.0f, 10.0f, "%.1f");
+            "Exposure", &app.exposure, -10.0f, 10.0f, "%.1f");
         ImGui::Checkbox("Draw geometry", &app.draw_geometry);
 
         ImGui::SeparatorText("Scene");
@@ -1908,8 +2129,54 @@ void main_loop_update(Application_state &app)
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    const auto do_render = app.sample_index < app.max_samples;
-    do_post_process = do_post_process || do_render;
+    // FIXME
+    if (1)
+    {
+        const std::size_t src {0};
+        const auto dst = 1 - src;
+
+        glUseProgram(app.forward_trace_program.get());
+        glBindVertexArray(app.trace_vaos[src].get());
+        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK,
+                                app.transform_feedback.get());
+        glBindBufferBase(
+            GL_TRANSFORM_FEEDBACK_BUFFER, 0, app.tf_buffers[dst].get());
+        glEnable(GL_RASTERIZER_DISCARD);
+        glBeginTransformFeedback(GL_POINTS);
+        glDrawArrays(GL_POINTS, 0, num_paths);
+        glEndTransformFeedback();
+        glDisable(GL_RASTERIZER_DISCARD);
+        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
+
+        glUseProgram(app.forward_segment_program.get());
+        glUniform2f(
+            app.loc_view_position_segment, app.scene.view_x, app.scene.view_y);
+        glUniform2f(app.loc_view_size_segment,
+                    app.scene.view_width,
+                    app.scene.view_height);
+        glUniform2f(app.loc_viewport_size_segment,
+                    static_cast<float>(app.texture_width),
+                    static_cast<float>(app.texture_height));
+        glBindVertexArray(app.segment_vaos[dst].get());
+        glBindFramebuffer(GL_FRAMEBUFFER, app.float_fbo.get());
+
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glBlendFunc(GL_ONE, GL_ONE);
+
+        glViewport(0, 0, app.texture_width, app.texture_height);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_paths);
+
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glBindVertexArray(0);
+        glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
+    }
+
+    const auto do_render = false; // app.sample_index < app.max_samples;
+    do_post_process = do_post_process || do_render || true;
 
     if (do_render)
     {
@@ -1977,7 +2244,7 @@ void main_loop_update(Application_state &app)
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, app.accumulation_texture.get());
         glUseProgram(app.post_program.get());
-        glUniform1f(app.loc_exposure_value, app.exposure_value);
+        glUniform1f(app.loc_exposure, app.exposure);
         glBindVertexArray(app.empty_vao.get());
         glViewport(0, 0, app.texture_width, app.texture_height);
         glDrawArrays(GL_TRIANGLES, 0, 3);

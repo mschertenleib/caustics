@@ -5,12 +5,13 @@ layout (location = 1) in vec2 vertex_local;
 layout (location = 2) in vec4 vertex_params;
 layout (location = 3) in vec3 vertex_color;
 
-uniform vec2 view_position;
-uniform vec2 view_size;
-
 out vec2 local;
 flat out vec4 params;
 flat out vec3 color;
+
+uniform vec2 view_position;
+uniform vec2 view_size;
+
 
 void main()
 {

@@ -3,7 +3,7 @@ precision highp float;
 
 uniform sampler2D accumulation_texture;
 
-uniform float exposure_value;
+uniform float exposure;
 
 out vec4 frag_color;
 
@@ -60,7 +60,7 @@ vec3 tone_map(vec3 color)
 
 vec3 sample_count_color(float sample_count)
 {
-    float scale = exp2(exposure_value) * 0.001;
+    float scale = exp2(exposure) * 0.001;
     float t = clamp(sample_count * scale, 0.0, 1.0);
     
     const vec3 c0 = vec3(0.05, 0.10, 0.50); // blue
@@ -90,8 +90,9 @@ void main()
 {
     vec4 accum = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
     vec3 color = accum.rgb / accum.a;
+    color = accum.rgb / 4096.0;
 #if 1
-    frag_color = vec4(tone_map(color * exp2(exposure_value)), 1.0);
+    frag_color = vec4(tone_map(color * exp2(exposure)), 1.0);
 #else
     frag_color = vec4(sample_count_color(accum.a), 1.0);
 #endif
