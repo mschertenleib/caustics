@@ -47,9 +47,9 @@ vec3 PBR_neutral_tone_map(vec3 color)
 
 vec3 tone_map(vec3 color)
 {
-#if 1
+#if 0
     return ACES_tone_map(color);
-#elif 0
+#elif 1
     return PBR_neutral_tone_map(color);
 #elif 0
     return color / (1.0 + color);
@@ -90,7 +90,7 @@ void main()
 {
     vec4 accum = texelFetch(accumulation_texture, ivec2(gl_FragCoord.xy), 0);
     vec3 color = accum.rgb / accum.a;
-    color = accum.rgb / 4096.0;
+    color = accum.rgb / 4096.0/256.0;
 #if 1
     frag_color = vec4(tone_map(color * exp2(exposure)), 1.0);
 #else

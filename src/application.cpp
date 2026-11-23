@@ -46,7 +46,7 @@
 namespace
 {
 
-constexpr std::uint32_t num_paths {4096}; // FIXME
+constexpr std::uint32_t num_paths {4096 * 128}; // FIXME
 
 constexpr std::size_t max_surfaces {256};
 constexpr std::size_t max_volumes {32};
@@ -104,6 +104,7 @@ static_assert(max_parabolas * sizeof(Parabola) <= max_ubo_size);
     F(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);                            \
     F(PFNGLUNIFORMBLOCKBINDINGPROC, glUniformBlockBinding);                    \
     F(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);                    \
+    F(PFNGLVERTEXATTRIBIPOINTERPROC, glVertexAttribIPointer);                  \
     F(PFNGLVERTEXATTRIBDIVISORPROC, glVertexAttribDivisor);                    \
     F(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);            \
     F(PFNGLTRANSFORMFEEDBACKVARYINGSPROC, glTransformFeedbackVaryings);        \
@@ -287,7 +288,9 @@ struct Path_record
     float radiance;
     float throughput;
     std::uint32_t alive;
+    vec2 segment_start;
     vec2 segment_end;
+    vec3 color;
 };
 
 struct Application_state
@@ -302,6 +305,10 @@ struct Application_state
 
     // Forward tracing
     Unique_handle<GLuint, GL_deleter> forward_trace_program;
+    GLint loc_forward_num_lines;
+    GLint loc_forward_num_arcs;
+    GLint loc_forward_num_parabolas;
+    GLint loc_forward_sample_index;
     Unique_handle<GLuint, GL_deleter> forward_segment_program;
     GLint loc_view_position_segment;
     GLint loc_view_size_segment;
@@ -867,6 +874,7 @@ void upload_uniform_buffer(GLuint ubo, const std::vector<T> &data)
 
 [[nodiscard]] auto create_forward_trace_program(const char *glsl_version)
 {
+    const auto trace_code = read_file("shaders/path_trace.glsl");
     const auto vertex_shader_code = read_file("shaders/forward.vert");
     const auto header = std::format("{}\n"
                                     "#define MAX_SURFACES {}u\n"
@@ -880,8 +888,8 @@ void upload_uniform_buffer(GLuint ubo, const std::vector<T> &data)
                                     max_lines,
                                     max_arcs,
                                     max_parabolas);
-    const char *const vertex_shader_sources[] {header.c_str(),
-                                               vertex_shader_code.c_str()};
+    const char *const vertex_shader_sources[] {
+        header.c_str(), trace_code.c_str(), vertex_shader_code.c_str()};
     const auto vertex_shader = create_shader(GL_VERTEX_SHADER,
                                              std::size(vertex_shader_sources),
                                              vertex_shader_sources);
@@ -908,13 +916,15 @@ void main() {
     glAttachShader(program.get(), vertex_shader.get());
     glAttachShader(program.get(), fragment_shader.get());
 
-    constexpr const char *varyings[] {"out_ray_origin",
-                                      "out_ray_direction",
-                                      "out_wavelength",
-                                      "out_radiance",
-                                      "out_throughput",
-                                      "out_alive",
-                                      "out_segment_end"};
+    constexpr const char *varyings[] {"tf_ray_origin",
+                                      "tf_ray_direction",
+                                      "tf_wavelength",
+                                      "tf_radiance",
+                                      "tf_throughput",
+                                      "tf_alive",
+                                      "tf_segment_start",
+                                      "tf_segment_end",
+                                      "tf_color"};
     glTransformFeedbackVaryings(
         program.get(), std::size(varyings), varyings, GL_INTERLEAVED_ATTRIBS);
 
@@ -941,7 +951,7 @@ void main() {
                            create_gl_object(glGenBuffers, glDeleteBuffers)};
 
     {
-        // We just initially need alive=false and well-defined default values
+        // We initially need alive=false and well-defined default values
         std::vector<Path_record> initial_records(num_paths);
 
         const auto buffer_size =
@@ -1012,29 +1022,24 @@ void main() {
             sizeof(Path_record),
             reinterpret_cast<const void *>(offsetof(Path_record, throughput)));
         glEnableVertexAttribArray(5);
-        glVertexAttribPointer(
+        glVertexAttribIPointer(
             5,
             1,
             GL_UNSIGNED_INT,
-            GL_FALSE,
             sizeof(Path_record),
             reinterpret_cast<const void *>(offsetof(Path_record, alive)));
-    }
 
-    for (std::size_t i {0}; i < 2; ++i)
-    {
         glBindVertexArray(segment_vaos[i].get());
 
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(
-            0,
-            2,
-            GL_FLOAT,
-            GL_FALSE,
-            sizeof(Path_record),
-            reinterpret_cast<const void *>(offsetof(Path_record, ray_origin)));
+        glVertexAttribPointer(0,
+                              2,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(Path_record),
+                              reinterpret_cast<const void *>(
+                                  offsetof(Path_record, segment_start)));
         glVertexAttribDivisor(0, 1); // Advance per instance
-
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(
             1,
@@ -1044,6 +1049,15 @@ void main() {
             sizeof(Path_record),
             reinterpret_cast<const void *>(offsetof(Path_record, segment_end)));
         glVertexAttribDivisor(1, 1); // Advance per instance
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(
+            2,
+            3,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(Path_record),
+            reinterpret_cast<const void *>(offsetof(Path_record, color)));
+        glVertexAttribDivisor(2, 1); // Advance per instance
     }
 
     glBindVertexArray(0);
@@ -1418,7 +1432,7 @@ void init_application(Application_state &app)
 #ifdef __EMSCRIPTEN__
     // WebGL 2.0
     constexpr auto glsl_version = "#version 300 es";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
 #else
@@ -1553,30 +1567,48 @@ void init_application(Application_state &app)
     app.arcs_ubo = create_uniform_buffer(max_arcs * sizeof(Arc));
     app.parabolas_ubo = create_uniform_buffer(max_parabolas * sizeof(Parabola));
 
-    const auto bind_ubo = [program = app.trace_program.get()](
-                              GLuint ubo, const char *name, GLuint binding)
+    const auto bind_ubo =
+        [](GLuint program, GLuint ubo, const char *name, GLuint binding)
     {
         const auto block_index = glGetUniformBlockIndex(program, name);
         glUniformBlockBinding(program, block_index, binding);
         glBindBufferBase(GL_UNIFORM_BUFFER, binding, ubo);
     };
-    bind_ubo(app.surfaces_ubo.get(), "Surfaces", 1);
-    bind_ubo(app.volumes_ubo.get(), "Volumes", 2);
-    bind_ubo(app.lines_ubo.get(), "Lines", 3);
-    bind_ubo(app.arcs_ubo.get(), "Arcs", 4);
-    bind_ubo(app.parabolas_ubo.get(), "Parabolas", 5);
+    bind_ubo(app.trace_program.get(), app.surfaces_ubo.get(), "Surfaces", 1);
+    bind_ubo(app.trace_program.get(), app.volumes_ubo.get(), "Volumes", 2);
+    bind_ubo(app.trace_program.get(), app.lines_ubo.get(), "Lines", 3);
+    bind_ubo(app.trace_program.get(), app.arcs_ubo.get(), "Arcs", 4);
+    bind_ubo(app.trace_program.get(), app.parabolas_ubo.get(), "Parabolas", 5);
 
     app.forward_trace_program = create_forward_trace_program(glsl_version);
+    bind_ubo(
+        app.forward_trace_program.get(), app.surfaces_ubo.get(), "Surfaces", 1);
+    bind_ubo(
+        app.forward_trace_program.get(), app.volumes_ubo.get(), "Volumes", 2);
+    bind_ubo(app.forward_trace_program.get(), app.lines_ubo.get(), "Lines", 3);
+    bind_ubo(app.forward_trace_program.get(), app.arcs_ubo.get(), "Arcs", 4);
+    bind_ubo(app.forward_trace_program.get(),
+             app.parabolas_ubo.get(),
+             "Parabolas",
+             5);
+    app.loc_forward_num_lines =
+        glGetUniformLocation(app.forward_trace_program.get(), "num_lines");
+    app.loc_forward_num_arcs =
+        glGetUniformLocation(app.forward_trace_program.get(), "num_arcs");
+    app.loc_forward_num_parabolas =
+        glGetUniformLocation(app.forward_trace_program.get(), "num_parabolas");
+    app.loc_forward_sample_index =
+        glGetUniformLocation(app.forward_trace_program.get(), "u_sample_index");
     app.forward_segment_program =
         create_program(glsl_version,
                        "shaders/forward_rasterize.vert",
                        "shaders/forward_rasterize.frag");
     app.loc_view_position_segment = glGetUniformLocation(
-        app.forward_segment_program.get(), "view_position");
+        app.forward_segment_program.get(), "u_view_position");
     app.loc_view_size_segment =
-        glGetUniformLocation(app.forward_segment_program.get(), "view_size");
+        glGetUniformLocation(app.forward_segment_program.get(), "u_view_size");
     app.loc_viewport_size_segment = glGetUniformLocation(
-        app.forward_segment_program.get(), "viewport_size");
+        app.forward_segment_program.get(), "u_viewport_size");
     app.transform_feedback =
         create_gl_object(glGenTransformFeedbacks, glDeleteTransformFeedbacks);
     std::tie(app.tf_buffers, app.trace_vaos, app.segment_vaos) =
@@ -2130,49 +2162,112 @@ void main_loop_update(Application_state &app)
     glClear(GL_COLOR_BUFFER_BIT);
 
     // FIXME
-    if (1)
+    static bool once = true;
+    if (once)
     {
-        const std::size_t src {0};
-        const auto dst = 1 - src;
+        once = false;
+        std::size_t src {0};
+        for (int i {0}; i < 32; ++i)
+        {
+            const auto dst = 1 - src;
 
-        glUseProgram(app.forward_trace_program.get());
-        glBindVertexArray(app.trace_vaos[src].get());
-        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK,
-                                app.transform_feedback.get());
-        glBindBufferBase(
-            GL_TRANSFORM_FEEDBACK_BUFFER, 0, app.tf_buffers[dst].get());
-        glEnable(GL_RASTERIZER_DISCARD);
-        glBeginTransformFeedback(GL_POINTS);
-        glDrawArrays(GL_POINTS, 0, num_paths);
-        glEndTransformFeedback();
-        glDisable(GL_RASTERIZER_DISCARD);
-        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
+            glUseProgram(app.forward_trace_program.get());
+            glUniform1ui(app.loc_forward_num_lines,
+                         static_cast<GLuint>(app.scene.lines.size()));
+            glUniform1ui(app.loc_forward_num_arcs,
+                         static_cast<GLuint>(app.scene.arcs.size()));
+            glUniform1ui(app.loc_forward_num_parabolas,
+                         static_cast<GLuint>(app.scene.parabolas.size()));
+            glUniform1ui(app.loc_forward_sample_index, app.sample_index);
+            glBindVertexArray(app.trace_vaos[src].get());
+            glBindTransformFeedback(GL_TRANSFORM_FEEDBACK,
+                                    app.transform_feedback.get());
+            glBindBufferBase(
+                GL_TRANSFORM_FEEDBACK_BUFFER, 0, app.tf_buffers[dst].get());
+            glEnable(GL_RASTERIZER_DISCARD);
+            glBeginTransformFeedback(GL_POINTS);
+            glDrawArrays(GL_POINTS, 0, num_paths);
+            glEndTransformFeedback();
+            glDisable(GL_RASTERIZER_DISCARD);
+            glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
 
-        glUseProgram(app.forward_segment_program.get());
-        glUniform2f(
-            app.loc_view_position_segment, app.scene.view_x, app.scene.view_y);
-        glUniform2f(app.loc_view_size_segment,
-                    app.scene.view_width,
-                    app.scene.view_height);
-        glUniform2f(app.loc_viewport_size_segment,
-                    static_cast<float>(app.texture_width),
-                    static_cast<float>(app.texture_height));
-        glBindVertexArray(app.segment_vaos[dst].get());
-        glBindFramebuffer(GL_FRAMEBUFFER, app.float_fbo.get());
+            glUseProgram(app.forward_segment_program.get());
+            glUniform2f(app.loc_view_position_segment,
+                        app.scene.view_x,
+                        app.scene.view_y);
+            glUniform2f(app.loc_view_size_segment,
+                        app.scene.view_width,
+                        app.scene.view_height);
+            glUniform2f(app.loc_viewport_size_segment,
+                        static_cast<float>(app.texture_width),
+                        static_cast<float>(app.texture_height));
+            glBindVertexArray(app.segment_vaos[dst].get());
+            glBindFramebuffer(GL_FRAMEBUFFER, app.float_fbo.get());
 
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+            if (app.sample_index == 0)
+            {
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
 
-        glBlendFunc(GL_ONE, GL_ONE);
+            glBlendFunc(GL_ONE, GL_ONE);
 
-        glViewport(0, 0, app.texture_width, app.texture_height);
-        glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_paths);
+            glViewport(0, 0, app.texture_width, app.texture_height);
+            glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_paths);
 
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        glBindVertexArray(0);
-        glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
-        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
+            glBindVertexArray(0);
+            glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+            glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, 0);
+
+            ++app.sample_index;
+            ++app.sum_samples;
+
+            /*const auto print_record = [&](const char *name,
+                                          std::size_t buffer_idx,
+                                          std::size_t record_idx)
+            {
+                std::vector<Path_record> records(num_paths);
+                glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER,
+                             app.tf_buffers[buffer_idx].get());
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,
+                                   0,
+                                   static_cast<GLsizeiptr>(records.size() *
+                                                           sizeof(Path_record)),
+                                   records.data());
+                glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, 0);
+                const auto record = records[record_idx];
+                std::cout << std::format("iter={}, path record [{}={}]:\n"
+                                         //"  ray_origin = {} {}\n"
+                                         //"  ray_direction = {} {}\n"
+                                         //"  wavelength = {}\n"
+                                         //"  radiance = {}\n"
+                                         //"  throughput = {}\n"
+                                         "  alive = {}\n"
+                                         "  segment_start = {} {}\n"
+                                         "  segment_end = {} {}\n",
+                                         i,
+                                         name,
+                                         buffer_idx,
+                                         // record.ray_origin.x,
+                                         // record.ray_origin.y,
+                                         // record.ray_direction.x,
+                                         // record.ray_direction.y,
+                                         // record.wavelength,
+                                         // record.radiance,
+                                         // record.throughput,
+                                         record.alive,
+                                         record.segment_start.x,
+                                         record.segment_start.y,
+                                         record.segment_end.x,
+                                         record.segment_end.y);
+            };
+            print_record("src", src, 5);
+            print_record("dst", dst, 5);*/
+
+            src = 1 - src;
+        }
     }
 
     const auto do_render = false; // app.sample_index < app.max_samples;

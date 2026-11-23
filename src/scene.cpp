@@ -108,13 +108,13 @@ Scene create_scene(int texture_width, int texture_height)
                          .volume_in_id = invalid_id,
                          .volume_out_id = invalid_id}};
     scene.arcs = {
-        Arc {.center = {0.8f, 0.5f},
+        /*Arc {.center = {0.8f, 0.5f},
              .radius = 0.03f,
              .clip_offset = 0.0f,
              .clip_normal = {},
              .surface_id = 0,
              .volume_in_id = invalid_id,
-             .volume_out_id = invalid_id},
+             .volume_out_id = invalid_id},*/
         Arc {.center = {0.5f, 0.3f},
              .radius = 0.15f,
              .clip_offset = 0.0f,

@@ -1,17 +1,19 @@
 precision highp float;
 
-layout (location = 0) in vec2 ray_origin;
-layout (location = 1) in vec2 segment_end;
 
-flat out vec2 start_px;
-flat out vec2 end_px;
-flat out vec2 start_world;
-flat out vec2 end_world;
-flat out float pixel_area;
+layout (location = 0) in vec2 a_segment_start;
+layout (location = 1) in vec2 a_segment_end;
+layout (location = 2) in vec3 a_color;
 
-uniform vec2 view_position;
-uniform vec2 view_size;
-uniform vec2 viewport_size;
+flat out vec2 v_start_px;
+flat out vec2 v_end_px;
+flat out float v_pixel_area;
+flat out float v_world_length;
+flat out vec3 v_color;
+
+uniform vec2 u_view_position;
+uniform vec2 u_view_size;
+uniform vec2 u_viewport_size;
 
 
 void main()
@@ -27,8 +29,8 @@ void main()
     vec2 vertex = vertices[gl_VertexID];
 
     // In pixel coordinates
-    vec2 p0 = ((ray_origin - view_position) / view_size + 0.5) * viewport_size;
-    vec2 p1 = ((segment_end - view_position) / view_size + 0.5) * viewport_size;
+    vec2 p0 = ((a_segment_start - u_view_position) / u_view_size + 0.5) * u_viewport_size;
+    vec2 p1 = ((a_segment_end - u_view_position) / u_view_size + 0.5) * u_viewport_size;
 
     vec2 delta = p1 - p0;
     float len = length(delta);
@@ -40,12 +42,12 @@ void main()
         mix(p0 - tangent * half_width, p1 + tangent * half_width, vertex.x)
         + normal * vertex.y * half_width;
 
-    vec2 position_ndc = 2.0 * position_px / viewport_size - 1.0;
+    vec2 position_ndc = 2.0 * position_px / u_viewport_size - 1.0;
     gl_Position = vec4(position_ndc, 0.0, 1.0);
 
-    start_px = p0;
-    end_px = p1;
-    start_world = ray_origin;
-    end_world = segment_end;
-    pixel_area = view_size.x * view_size.y / (viewport_size.x * viewport_size.y);
+    v_start_px = p0;
+    v_end_px = p1;
+    v_pixel_area = u_view_size.x * u_view_size.y / (u_viewport_size.x * u_viewport_size.y);
+    v_world_length = length(a_segment_end - a_segment_start);
+    v_color = a_color;
 }
